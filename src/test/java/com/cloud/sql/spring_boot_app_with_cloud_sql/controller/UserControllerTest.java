@@ -11,9 +11,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cloud.sql.spring_boot_app_with_cloud_sql.dto.RebateResponse;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.entity.User;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,5 +85,26 @@ class UserControllerTest {
     doNothing().when(userService).delete(1);
 
     mockMvc.perform(delete("/api/users/1")).andExpect(status().isOk());
+  }
+
+  @Test
+  void getRebate_returns200_withRebateDetails() throws Exception {
+    RebateResponse response =
+        new RebateResponse(
+            1,
+            "Alice",
+            "PREMIUM",
+            LocalDate.of(2022, 1, 1),
+            30.0,
+            "10% loyalty rebate (subscribed for over 1 year) + 20% Premium plan rebate. Total: 30% off renewal.");
+    when(userService.calculateRebate(1)).thenReturn(response);
+
+    mockMvc
+        .perform(get("/api/users/1/rebate"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.userId").value(1))
+        .andExpect(jsonPath("$.plan").value("PREMIUM"))
+        .andExpect(jsonPath("$.rebatePercentage").value(30.0))
+        .andExpect(jsonPath("$.message").value(response.getMessage()));
   }
 }

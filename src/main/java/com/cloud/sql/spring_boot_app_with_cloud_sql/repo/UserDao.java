@@ -13,6 +13,9 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class UserDao {
 
+  private static final String SELECT_ALL =
+      "SELECT id, name, plan, subscribe_date, unsubscribe_date FROM users";
+
   private final NamedParameterJdbcTemplate jdbcTemplate;
   private final UserRowMapper rowMapper;
 
@@ -22,8 +25,10 @@ public class UserDao {
   }
 
   public User insert(User user) {
-    String sql = "INSERT INTO users (name) VALUES (:name)";
-    MapSqlParameterSource params = new MapSqlParameterSource().addValue("name", user.getName());
+    String sql =
+        "INSERT INTO users (name, plan, subscribe_date, unsubscribe_date)"
+            + " VALUES (:name, :plan, :subscribeDate, :unsubscribeDate)";
+    MapSqlParameterSource params = buildParams(user);
     KeyHolder keyHolder = new GeneratedKeyHolder();
     jdbcTemplate.update(sql, params, keyHolder, new String[] {"id"});
     user.setId(keyHolder.getKey().intValue());
@@ -31,23 +36,33 @@ public class UserDao {
   }
 
   public User update(User user) {
-    String sql = "UPDATE users SET name = :name WHERE id = :id";
-    jdbcTemplate.update(sql, Map.of("name", user.getName(), "id", user.getId()));
+    String sql =
+        "UPDATE users SET name = :name, plan = :plan,"
+            + " subscribe_date = :subscribeDate, unsubscribe_date = :unsubscribeDate"
+            + " WHERE id = :id";
+    jdbcTemplate.update(sql, buildParams(user).addValue("id", user.getId()));
     return user;
   }
 
   public List<User> findAll() {
-    return jdbcTemplate.query("SELECT id, name FROM users", rowMapper);
+    return jdbcTemplate.query(SELECT_ALL, rowMapper);
   }
 
   public Optional<User> findById(Integer id) {
     List<User> results =
-        jdbcTemplate.query(
-            "SELECT id, name FROM users WHERE id = :id", Map.of("id", id), rowMapper);
+        jdbcTemplate.query(SELECT_ALL + " WHERE id = :id", Map.of("id", id), rowMapper);
     return results.stream().findFirst();
   }
 
   public void deleteById(Integer id) {
     jdbcTemplate.update("DELETE FROM users WHERE id = :id", Map.of("id", id));
+  }
+
+  private MapSqlParameterSource buildParams(User user) {
+    return new MapSqlParameterSource()
+        .addValue("name", user.getName())
+        .addValue("plan", user.getPlan())
+        .addValue("subscribeDate", user.getSubscribeDate())
+        .addValue("unsubscribeDate", user.getUnsubscribeDate());
   }
 }

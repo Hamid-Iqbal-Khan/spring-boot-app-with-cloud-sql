@@ -1,5 +1,6 @@
 package com.cloud.sql.spring_boot_app_with_cloud_sql.controller;
 
+import com.cloud.sql.spring_boot_app_with_cloud_sql.dto.RebateResponse;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.entity.User;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.service.UserService;
 import java.util.List;
@@ -53,5 +54,11 @@ public class UserController {
   public String delete(@PathVariable Integer id) {
     service.delete(id);
     return "User deleted successfully";
+  }
+
+  @GetMapping("/{id}/rebate")
+  @ResponseStatus(HttpStatus.OK)
+  public RebateResponse getRebate(@PathVariable Integer id) {
+    return service.calculateRebate(id);
   }
 }

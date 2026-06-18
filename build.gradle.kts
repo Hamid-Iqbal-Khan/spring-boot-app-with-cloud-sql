@@ -3,6 +3,8 @@ plugins {
     id("org.springframework.boot") version "4.1.0"
     id("io.spring.dependency-management") version "1.1.7"
     id("com.diffplug.spotless") version "7.0.4"
+    id("org.sonarqube") version "6.0.1.5171"
+    jacoco
 }
 
 group = "com.cloud.sql"
@@ -27,6 +29,16 @@ spotless {
     }
 }
 
+sonar {
+    properties {
+        property("sonar.projectKey", "spring-boot-app-with-cloud-sql")
+        property("sonar.organization", "YOUR_SONARCLOUD_ORG_KEY")
+        property("sonar.host.url", "https://sonarcloud.io")
+        property("sonar.coverage.jacoco.xmlReportPaths", "${layout.buildDirectory.get()}/reports/jacoco/test/jacocoTestReport.xml")
+        property("sonar.exclusions", "**/config/**,**/dto/**,**/entity/**")
+    }
+}
+
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
@@ -46,4 +58,13 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    finalizedBy(tasks.jacocoTestReport)
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        xml.required = true
+        html.required = true
+    }
 }
