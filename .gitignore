@@ -5,6 +5,10 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+### Sensitive config ###
+src/main/resources/application.properties
+cloud-sql-proxy.exe
+
 ### STS ###
 .apt_generated
 .classpath

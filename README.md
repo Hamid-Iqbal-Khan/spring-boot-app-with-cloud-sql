@@ -1,638 +1,687 @@
-# Service Dev — Spring Boot on Google Cloud Run with Cloud SQL PostgreSQL
+# Spring Boot App with Cloud SQL
 
-A complete guide documenting every step taken to deploy a Spring Boot REST API to Google Cloud Run with Cloud SQL PostgreSQL as the database.
+A production-ready Spring Boot REST API that demonstrates clean architecture using **Spring JDBC** (no JPA/Hibernate), **Flyway** database migrations, **Spotless** code formatting, and connectivity to **Google Cloud SQL PostgreSQL** — deployable on **Cloud Run**.
 
 ---
 
 ## Table of Contents
 
-1. [Application Overview](#1-application-overview)
+1. [Project Overview](#1-project-overview)
 2. [Tech Stack](#2-tech-stack)
 3. [Project Structure](#3-project-structure)
-4. [Prerequisites](#4-prerequisites)
-5. [Google Cloud Account Setup](#5-google-cloud-account-setup)
-6. [Fix ADC Quota Project Warning](#6-fix-adc-quota-project-warning)
-7. [Enable Required Google Cloud APIs](#7-enable-required-google-cloud-apis)
-8. [Create Cloud SQL PostgreSQL Instance](#8-create-cloud-sql-postgresql-instance)
-9. [Store Secrets in Secret Manager](#9-store-secrets-in-secret-manager)
-10. [Create Artifact Registry](#10-create-artifact-registry)
-11. [Build and Push Docker Image](#11-build-and-push-docker-image)
-12. [Create Service Account and Grant Permissions](#12-create-service-account-and-grant-permissions)
-13. [Deploy to Cloud Run](#13-deploy-to-cloud-run)
-14. [Connect DBeaver to Cloud SQL](#14-connect-dbeaver-to-cloud-sql)
-15. [Swagger UI — API Documentation and Testing](#15-swagger-ui--api-documentation-and-testing)
-16. [API Endpoints Reference](#16-api-endpoints-reference)
-17. [Infrastructure Summary](#17-infrastructure-summary)
+4. [Architecture & Design Decisions](#4-architecture--design-decisions)
+5. [JDBC Template — Deep Dive](#5-jdbc-template--deep-dive)
+6. [Flyway Database Migrations](#6-flyway-database-migrations)
+7. [Spotless Code Formatting](#7-spotless-code-formatting)
+8. [Local Development Setup](#8-local-development-setup)
+9. [Google Cloud SQL Setup](#9-google-cloud-sql-setup)
+10. [Running the Application](#10-running-the-application)
+11. [API Reference](#11-api-reference)
+12. [Testing](#12-testing)
+13. [Verifying Data](#13-verifying-data)
+14. [Cloud Run Deployment](#14-cloud-run-deployment)
+15. [Coding Standards](#15-coding-standards)
 
 ---
 
-## 1. Application Overview
+## 1. Project Overview
 
-This is a Spring Boot REST API that performs CRUD operations on a `User` entity, backed by a PostgreSQL database hosted on Google Cloud SQL. The application runs as a containerized service on Google Cloud Run and connects to Cloud SQL using the Cloud SQL Socket Factory (no IP whitelisting required).
+This project exposes a simple **User CRUD REST API** backed by PostgreSQL. It was built following strict enterprise coding standards:
 
-**Live URL:**
-```
-https://service-dev-1007977084712.us-central1.run.app
-```
-
-**Swagger UI:**
-```
-https://service-dev-1007977084712.us-central1.run.app/swagger-ui/index.html
-```
+- No Lombok — all boilerplate written explicitly
+- No direct Hibernate/JPA dependency — uses Spring JDBC with `NamedParameterJdbcTemplate`
+- Constructor injection throughout — no field-level `@Autowired`
+- Flyway manages all schema changes — no `ddl-auto=update`
+- Spotless enforces Google Java Format on every build
+- Full unit test coverage — service (Mockito), DAO (`@JdbcTest`), controller (`@WebMvcTest`)
 
 ---
 
 ## 2. Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Language | Java 21 |
-| Framework | Spring Boot 4.1 |
-| ORM | Spring Data JPA + Hibernate |
-| Database | PostgreSQL 15 (Cloud SQL) |
-| DB Connection | Cloud SQL Socket Factory |
-| Container | Docker (multi-stage build) |
-| Container Registry | Google Artifact Registry |
-| Hosting | Google Cloud Run |
-| Secrets | Google Secret Manager |
-| API Docs | SpringDoc OpenAPI (Swagger UI) |
-| Build Tool | Gradle (Kotlin DSL) |
+| Technology | Version | Purpose |
+|---|---|---|
+| Java | 21 | Language |
+| Spring Boot | 4.1.0 | Application framework |
+| Spring JDBC | 7.0.8 | Database access via JdbcTemplate |
+| Flyway | 12.4.0 | Database schema migrations |
+| PostgreSQL | 16 | Database |
+| Google Cloud SQL | - | Managed PostgreSQL on GCP |
+| Spotless | 7.0.4 | Code formatting (Google Java Format) |
+| SpringDoc OpenAPI | 2.8.9 | Swagger UI |
+| JUnit 5 + Mockito | - | Unit testing |
+| Gradle | 9.5.1 | Build tool |
 
 ---
 
 ## 3. Project Structure
 
 ```
-service-dev/
+spring-boot-app-with-cloud-sql/
 ├── src/
-│   └── main/
-│       ├── java/com/cloud/sql/service_dev/
-│       │   ├── ServiceDevApplication.java       # Entry point
-│       │   ├── controller/
-│       │   │   └── UserController.java          # REST endpoints
-│       │   ├── service/
-│       │   │   └── UserService.java             # Business logic
-│       │   ├── repo/
-│       │   │   └── UserRepository.java          # JPA repository
-│       │   └── entity/
-│       │       └── User.java                    # User entity (id, name)
-│       └── resources/
-│           └── application.properties           # App configuration
-├── Dockerfile                                   # Multi-stage Docker build
-├── build.gradle.kts                             # Dependencies
-└── README.md
+│   ├── main/
+│   │   ├── java/com/cloud/sql/spring_boot_app_with_cloud_sql/
+│   │   │   ├── SpringBootAppWithCloudSqlApplication.java   # Entry point
+│   │   │   ├── config/
+│   │   │   │   └── JdbcConfig.java                         # NamedParameterJdbcTemplate bean
+│   │   │   ├── controller/
+│   │   │   │   └── UserController.java                     # REST endpoints
+│   │   │   ├── entity/
+│   │   │   │   └── User.java                               # Plain POJO (no JPA annotations)
+│   │   │   ├── repo/
+│   │   │   │   ├── UserDao.java                            # Data access using JdbcTemplate
+│   │   │   │   └── UserRowMapper.java                      # Maps ResultSet rows to User objects
+│   │   │   └── service/
+│   │   │       └── UserService.java                        # Business logic
+│   │   └── resources/
+│   │       ├── application.properties                      # App configuration (git-ignored)
+│   │       └── db/migration/
+│   │           └── V1__create_users_table.sql              # Flyway migration
+│   └── test/
+│       └── java/com/cloud/sql/spring_boot_app_with_cloud_sql/
+│           ├── controller/UserControllerTest.java          # @WebMvcTest
+│           ├── repo/UserDaoTest.java                       # @JdbcTest
+│           └── service/UserServiceTest.java                # Pure Mockito
+├── build.gradle.kts
+├── settings.gradle.kts
+├── Dockerfile
+└── .gitignore
 ```
 
 ---
 
-## 4. Prerequisites
+## 4. Architecture & Design Decisions
 
-Install the following tools before starting:
+### Why Spring JDBC instead of JPA/Hibernate?
 
-### Google Cloud CLI (gcloud)
-Download from: https://cloud.google.com/sdk/docs/install
+The coding standards explicitly prohibit adding Hibernate or Lombok as direct dependencies. Spring JDBC was chosen because:
 
-Verify installation:
-```powershell
-gcloud version
+- **Full SQL control** — you write exactly what hits the database, no surprises
+- **No magic** — no lazy loading issues, no N+1 query problems, no entity state management
+- **Lighter** — no entity manager, no persistence context, no proxy-wrapped entities
+- **Explicit** — every query is visible in the DAO class, making the codebase easier to audit
+
+### Layer responsibilities
+
+```
+HTTP Request
+     │
+     ▼
+UserController      ← handles HTTP, maps request/response, sets status codes
+     │
+     ▼
+UserService         ← business logic, never touches JdbcTemplate directly
+     │
+     ▼
+UserDao             ← all SQL lives here, uses NamedParameterJdbcTemplate
+     │
+     ▼
+UserRowMapper       ← converts a ResultSet row into a User object
+     │
+     ▼
+PostgreSQL
 ```
 
-### Docker Desktop
-Download from: https://www.docker.com/products/docker-desktop/
-
-Verify installation:
-```powershell
-docker --version
-```
-
-### Python 3.11+
-Required by gcloud CLI internally.
-Download from: https://www.python.org/downloads/
-
-During installation, check **"Add Python to PATH"**, then restart PowerShell.
-
-### DBeaver (Database GUI)
-Download from: https://dbeaver.io/download/
-
-### Cloud SQL Auth Proxy
-Download from: https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.15.2/cloud-sql-proxy.x64.windows.exe
-
-> Note: The downloaded file may save as `cloud-sql-proxy.exe.exe` — use the exact saved filename when running it.
+Each layer has one job. The service never touches the database directly. The DAO never contains business logic.
 
 ---
 
-## 5. Google Cloud Account Setup
+## 5. JDBC Template — Deep Dive
 
-1. Go to https://cloud.google.com
-2. Click **"Get started for free"** — you receive **$300 free credits** for 90 days
-3. Sign in with your Google account
-4. Fill in billing information (required, but no charges during free tier)
-5. Once inside the console, note your **Project ID** shown in the top bar
+### What is JdbcTemplate?
 
-### Login and Set Project via CLI
+`JdbcTemplate` is Spring's core JDBC abstraction. It eliminates the boilerplate of opening connections, creating statements, handling exceptions, and closing resources — all of which you would have to do manually with raw JDBC.
 
-```powershell
-gcloud auth login
-gcloud config set project service-dev-499704
+**Raw JDBC (without Spring) — 20+ lines for a simple query:**
+```java
+Connection conn = dataSource.getConnection();
+PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE id = ?");
+ps.setInt(1, id);
+ResultSet rs = ps.executeQuery();
+User user = null;
+if (rs.next()) {
+    user = new User(rs.getInt("id"), rs.getString("name"));
+}
+rs.close();
+ps.close();
+conn.close(); // must be in finally block or it leaks
+```
+
+**With NamedParameterJdbcTemplate — 3 lines:**
+```java
+jdbcTemplate.query(
+    "SELECT id, name FROM users WHERE id = :id",
+    Map.of("id", id),
+    rowMapper);
+```
+
+Spring handles connection acquisition, statement preparation, exception translation, and resource cleanup automatically.
+
+### JdbcTemplate vs NamedParameterJdbcTemplate
+
+| | `JdbcTemplate` | `NamedParameterJdbcTemplate` |
+|---|---|---|
+| Parameter style | `?` positional | `:name` named |
+| Readability | Lower (order matters) | Higher (self-documenting) |
+| Error-prone | Yes (wrong order = wrong data) | No |
+| Example | `WHERE id = ?` | `WHERE id = :id` |
+
+This project uses `NamedParameterJdbcTemplate` exclusively because named parameters are safer and easier to read — especially in complex queries with many parameters.
+
+### JdbcConfig.java — Registering the Bean
+
+```java
+@Configuration
+public class JdbcConfig {
+
+  @Bean
+  public NamedParameterJdbcTemplate namedParameterJdbcTemplate(DataSource dataSource) {
+    return new NamedParameterJdbcTemplate(dataSource);
+  }
+}
+```
+
+Spring Boot auto-configures a `DataSource` from `application.properties`. This config class takes that `DataSource` and wraps it in a `NamedParameterJdbcTemplate`, making it available for injection anywhere in the application. The `@Bean` method uses constructor-style parameter injection — the `DataSource` is injected by Spring automatically.
+
+### UserRowMapper.java — Mapping ResultSet to Object
+
+```java
+@Component
+public class UserRowMapper implements RowMapper<User> {
+
+  @Override
+  public User mapRow(ResultSet rs, int rowNum) throws SQLException {
+    return new User(rs.getInt("id"), rs.getString("name"));
+  }
+}
+```
+
+A `RowMapper<T>` is a functional interface with one method: `mapRow`. It is called once per row returned by a query. Spring passes you the `ResultSet` already positioned at the current row — you just read columns by name and construct your object.
+
+- `rs.getInt("id")` — reads the `id` column as an integer
+- `rs.getString("name")` — reads the `name` column as a String
+- `rowNum` — the current row number, useful if you need row-position-specific logic
+
+The `@Component` annotation registers it as a Spring bean so it can be injected into `UserDao`.
+
+### UserDao.java — All SQL in One Place
+
+```java
+@Repository
+public class UserDao {
+
+  private final NamedParameterJdbcTemplate jdbcTemplate;
+  private final UserRowMapper rowMapper;
+
+  public UserDao(NamedParameterJdbcTemplate jdbcTemplate, UserRowMapper rowMapper) {
+    this.jdbcTemplate = jdbcTemplate;
+    this.rowMapper = rowMapper;
+  }
+}
+```
+
+`@Repository` serves two purposes:
+1. Marks this class as a Spring-managed DAO component
+2. Enables Spring's persistence exception translation — any database exception is automatically wrapped in a meaningful Spring `DataAccessException` (e.g., `BadSqlGrammarException`, `DuplicateKeyException`) instead of a raw `SQLException`
+
+#### INSERT with generated key retrieval
+
+```java
+public User insert(User user) {
+  String sql = "INSERT INTO users (name) VALUES (:name)";
+  MapSqlParameterSource params = new MapSqlParameterSource()
+      .addValue("name", user.getName());
+  KeyHolder keyHolder = new GeneratedKeyHolder();
+  jdbcTemplate.update(sql, params, keyHolder, new String[]{"id"});
+  user.setId(keyHolder.getKey().intValue());
+  return user;
+}
+```
+
+- `MapSqlParameterSource` — a map of named parameters to their values
+- `GeneratedKeyHolder` — captures the database-generated primary key after insert
+- `new String[]{"id"}` — tells the JDBC driver which column holds the generated key
+- After `update()`, `keyHolder.getKey()` contains the new `id` assigned by the PostgreSQL `SERIAL` sequence
+
+#### SELECT all rows
+
+```java
+public List<User> findAll() {
+  return jdbcTemplate.query("SELECT id, name FROM users", rowMapper);
+}
+```
+
+`query()` executes the SQL, iterates every row, calls `rowMapper.mapRow()` for each, and returns a `List<User>`. If no rows exist, it returns an empty list (never null).
+
+#### SELECT single row by ID
+
+```java
+public Optional<User> findById(Integer id) {
+  List<User> results = jdbcTemplate.query(
+      "SELECT id, name FROM users WHERE id = :id",
+      Map.of("id", id),
+      rowMapper);
+  return results.stream().findFirst();
+}
+```
+
+`query()` is used instead of `queryForObject()` deliberately. `queryForObject()` throws `EmptyResultDataAccessException` when no row is found — requiring a try/catch. Using `query()` and `stream().findFirst()` returns an `Optional<User>` cleanly, which the service layer converts to a meaningful exception.
+
+#### UPDATE
+
+```java
+public User update(User user) {
+  String sql = "UPDATE users SET name = :name WHERE id = :id";
+  jdbcTemplate.update(sql, Map.of("name", user.getName(), "id", user.getId()));
+  return user;
+}
+```
+
+`Map.of()` is a concise shorthand for passing named parameters inline. The `update()` method returns the number of affected rows — available if you need to validate that a row was actually found and updated.
+
+#### DELETE
+
+```java
+public void deleteById(Integer id) {
+  jdbcTemplate.update("DELETE FROM users WHERE id = :id", Map.of("id", id));
+}
+```
+
+The same `update()` method handles INSERT, UPDATE, and DELETE — anything that modifies data uses this method.
+
+### Key JdbcTemplate methods summary
+
+| Method | Use case | Returns |
+|---|---|---|
+| `query(sql, params, rowMapper)` | SELECT multiple rows | `List<T>` |
+| `queryForObject(sql, params, rowMapper)` | SELECT exactly one row | `T` (throws if 0 or 2+ rows) |
+| `queryForObject(sql, params, Class)` | SELECT a scalar value | scalar (e.g., `Integer`, `String`) |
+| `update(sql, params)` | INSERT / UPDATE / DELETE | `int` (rows affected) |
+| `update(sql, params, keyHolder, cols)` | INSERT with auto-generated key | `int`, key in `keyHolder` |
+| `batchUpdate(sql, batchParams)` | Bulk INSERT / UPDATE | `int[]` |
+
+---
+
+## 6. Flyway Database Migrations
+
+Flyway is a database migration tool that versions your schema changes as SQL scripts and applies them in order — exactly like Git for your database.
+
+### How it works
+
+1. On application startup, Flyway scans `src/main/resources/db/migration/`
+2. It checks a `flyway_schema_history` table in the database to see which migrations have already run
+3. It applies any new migrations in version order
+4. If a previously applied migration file is modified, Flyway fails the startup — protecting against accidental schema drift
+
+### Naming convention
+
+```
+V{version}__{description}.sql
+
+V1__create_users_table.sql
+V2__add_email_to_users.sql
+V3__create_orders_table.sql
+```
+
+### V1__create_users_table.sql
+
+```sql
+CREATE TABLE IF NOT EXISTS users
+(
+    id   SERIAL,
+    name VARCHAR(255) NOT NULL,
+    CONSTRAINT users_pk PRIMARY KEY (id)
+);
+```
+
+- `SERIAL` — PostgreSQL auto-increment (assigns the next value from a sequence on every insert)
+- `CONSTRAINT users_pk PRIMARY KEY (id)` — named constraint following the `TABLE_PK` naming standard from the coding guidelines
+- `IF NOT EXISTS` — safe to run even if the table already exists
+
+### Verifying migrations ran
+
+```sql
+SELECT * FROM flyway_schema_history;
 ```
 
 ---
 
-## 6. Fix ADC Quota Project Warning
+## 7. Spotless Code Formatting
 
-After setting the project you may see:
+Spotless enforces **Google Java Format** automatically.
 
+```bash
+# Format all Java files
+./gradlew spotlessApply
+
+# Check formatting without changing files (useful in CI)
+./gradlew spotlessCheck
 ```
-WARNING: Your active project does not match the quota project in your local Application Default Credentials file.
+
+Google Java Format enforces 2-space indentation, import ordering, line length limits, and blank line rules. Run `spotlessApply` before every commit.
+
+---
+
+## 8. Local Development Setup
+
+### Prerequisites
+
+- Java 21
+- PostgreSQL installed locally
+- IntelliJ IDEA
+
+### Step 1 — Create local database
+
+```sql
+CREATE DATABASE postgres;
+CREATE USER postgres WITH PASSWORD 'postgres';
+GRANT ALL PRIVILEGES ON DATABASE postgres TO postgres;
 ```
 
-Fix it by re-authenticating Application Default Credentials:
+### Step 2 — Create application.properties
+
+This file is git-ignored. Create it at `src/main/resources/application.properties`:
+
+```properties
+spring.application.name=spring-boot-app-with-cloud-sql
+server.forward-headers-strategy=framework
+
+spring.datasource.url=jdbc:postgresql://localhost:5432/postgres
+spring.datasource.username=postgres
+spring.datasource.password=postgres
+
+spring.flyway.enabled=true
+spring.flyway.locations=classpath:db/migration
+```
+
+### Step 3 — Run
+
+```bash
+./gradlew bootRun
+```
+
+Flyway creates the `users` table automatically on first startup.
+
+---
+
+## 9. Google Cloud SQL Setup
+
+### Step 1 — Create Cloud SQL Instance
+
+1. GCP Console → **SQL** → **Create Instance** → **PostgreSQL 16**
+2. Instance ID: `my-postgres-instance`
+3. Password: strong password for `postgres` user
+4. Region: `us-central1`
+5. Zonal availability: Single zone (sufficient for development)
+
+### Step 2 — Create Database
+
+Instance → **Databases** → **Create Database** → name it `appdb`
+
+### Step 3 — Note your connection name
+
+From the instance overview page, copy the **Connection name**:
+```
+spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance
+```
+
+### Step 4 — Authorize your public IP
+
+```powershell
+# Find your public IP
+(Invoke-WebRequest -Uri "https://api.ipify.org" -UseBasicParsing).Content
+```
+
+Instance → **Connections** → **Networking** → **Add a Network** → enter `YOUR_IP/32`
+
+### Step 5 — Download Cloud SQL Auth Proxy
+
+Download from: `https://github.com/GoogleCloudPlatform/cloud-sql-proxy/releases/latest`
+
+Download `cloud-sql-proxy.x64.windows.exe`, rename to `cloud-sql-proxy.exe`. Do not commit this file (it is in `.gitignore`).
+
+### Step 6 — Authenticate with GCP
 
 ```powershell
 gcloud auth application-default login
-gcloud auth application-default set-quota-project service-dev-499704
+```
+
+### Step 7 — Run Auth Proxy (keep this terminal open)
+
+```powershell
+.\cloud-sql-proxy.exe spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance --port=5433
 ```
 
 Expected output:
 ```
-Credentials saved to file: [C:\Users\admin\AppData\Roaming\gcloud\application_default_credentials.json]
-Quota project "service-dev-499704" was added to ADC which can be used by Google client libraries for billing and quota.
+The proxy has started successfully and is ready for new connections!
+```
+
+### Step 8 — Switch application.properties to Cloud SQL
+
+```properties
+spring.application.name=spring-boot-app-with-cloud-sql
+server.forward-headers-strategy=framework
+
+# Cloud SQL via Auth Proxy (local dev)
+spring.datasource.url=jdbc:postgresql://127.0.0.1:5433/appdb
+spring.datasource.username=postgres
+spring.datasource.password=YOUR_CLOUD_SQL_PASSWORD
+
+# Cloud Run (uncomment when deploying)
+#spring.datasource.url=jdbc:postgresql:///${DB_NAME:appdb}?cloudSqlInstance=${INSTANCE_CONNECTION_NAME:}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+#spring.datasource.username=${DB_USER:postgres}
+#spring.datasource.password=${DB_PASS:}
+
+spring.flyway.enabled=true
+spring.flyway.locations=classpath:db/migration
 ```
 
 ---
 
-## 7. Enable Required Google Cloud APIs
+## 10. Running the Application
+
+### Kill any process on port 8080/8081 if needed
 
 ```powershell
-gcloud services enable `
-  run.googleapis.com `
-  sqladmin.googleapis.com `
-  artifactregistry.googleapis.com `
-  cloudbuild.googleapis.com `
-  secretmanager.googleapis.com `
-  --project=service-dev-499704
+netstat -ano | findstr :8080
+taskkill /PID <PID> /F
 ```
 
-Expected output:
-```
-Operation "operations/acf.p2-..." finished successfully.
-```
+### Run from IntelliJ terminal
 
-APIs enabled:
-| API | Purpose |
-|-----|---------|
-| `run.googleapis.com` | Cloud Run — serverless container hosting |
-| `sqladmin.googleapis.com` | Cloud SQL — managed PostgreSQL |
-| `artifactregistry.googleapis.com` | Docker image storage |
-| `cloudbuild.googleapis.com` | Cloud build services |
-| `secretmanager.googleapis.com` | Secure secret storage |
-
----
-
-## 8. Create Cloud SQL PostgreSQL Instance
-
-```powershell
-gcloud sql instances create service-dev-db `
-  --database-version=POSTGRES_15 `
-  --tier=db-f1-micro `
-  --region=us-central1 `
-  --root-password=postgres `
-  --project=service-dev-499704
+```bash
+./gradlew bootRun
 ```
 
-Expected output:
+### Successful startup output
+
 ```
-NAME            DATABASE_VERSION  LOCATION       TIER         PRIMARY_ADDRESS  STATUS
-service-dev-db  POSTGRES_15       us-central1-a  db-f1-micro  136.114.167.233  RUNNABLE
-```
-
-> No separate database or user creation is needed. The default `postgres` database and `postgres` user are created automatically with the root password set above. This matches the `application.properties` defaults exactly.
-
-### Get Instance Connection Name
-
-```powershell
-gcloud sql instances describe service-dev-db --format="value(connectionName)" --project=service-dev-499704
+o.f.core.internal.command.DbMigrate : Successfully applied 1 migration to schema "public"
+o.s.boot.tomcat.TomcatWebServer     : Tomcat started on port 8081 (http)
+SpringBootAppWithCloudSqlApplication : Started in 2.5 seconds
 ```
 
-Output:
+### Swagger UI
+
 ```
-service-dev-499704:us-central1:service-dev-db
+http://localhost:8081/swagger-ui/index.html
 ```
 
 ---
 
-## 9. Store Secrets in Secret Manager
+## 11. API Reference
 
-Secrets are stored securely and injected into Cloud Run as environment variables at runtime.
+Base URL: `http://localhost:8081/api/users`
 
-**Important:** Write the secret value to a file first to avoid PowerShell adding hidden quotes or newlines:
+| Method | Endpoint | Status | Description |
+|---|---|---|---|
+| POST | `/api/users` | 201 Created | Create a new user |
+| GET | `/api/users` | 200 OK | Get all users |
+| GET | `/api/users/{id}` | 200 OK | Get user by ID |
+| PUT | `/api/users/{id}` | 200 OK | Update user name |
+| DELETE | `/api/users/{id}` | 200 OK | Delete user |
 
-```powershell
-[System.IO.File]::WriteAllText("$env:TEMP\dbsecret.txt", "postgres")
-gcloud secrets create db-pass --data-file="$env:TEMP\dbsecret.txt" --project=service-dev-499704
-gcloud secrets create db-user --data-file="$env:TEMP\dbsecret.txt" --project=service-dev-499704
-gcloud secrets create db-name --data-file="$env:TEMP\dbsecret.txt" --project=service-dev-499704
-```
-
-> **Why not use `echo "postgres" | gcloud secrets create ...`?**
-> PowerShell's `echo` wraps the value in quotes, storing `"postgres"` instead of `postgres`, which causes password authentication to fail at runtime.
-
-| Secret Name | Value | Maps To |
-|-------------|-------|---------|
-| `db-pass` | `postgres` | `DB_PASS` env var |
-| `db-user` | `postgres` | `DB_USER` env var |
-| `db-name` | `postgres` | `DB_NAME` env var |
-
----
-
-## 10. Create Artifact Registry
-
-Artifact Registry stores your Docker image.
+### curl examples (PowerShell)
 
 ```powershell
-gcloud artifacts repositories create service-dev-repo `
-  --repository-format=docker `
-  --location=us-central1 `
-  --project=service-dev-499704
-```
+# Create
+curl -X POST http://localhost:8081/api/users -H "Content-Type: application/json" -d '{\"name\": \"Alice\"}'
 
-Configure Docker to authenticate with Google's registry:
+# Get all
+curl http://localhost:8081/api/users
 
-```powershell
-gcloud auth configure-docker us-central1-docker.pkg.dev --project=service-dev-499704
-```
+# Get by ID
+curl http://localhost:8081/api/users/1
 
-When prompted, type `Y` to confirm.
+# Update
+curl -X PUT http://localhost:8081/api/users/1 -H "Content-Type: application/json" -d '{\"name\": \"Alice Updated\"}'
 
----
-
-## 11. Build and Push Docker Image
-
-Make sure **Docker Desktop is running** before building.
-
-### Dockerfile (multi-stage build)
-
-```dockerfile
-FROM eclipse-temurin:21-jdk-alpine AS build
-WORKDIR /app
-COPY gradlew .
-COPY gradle gradle
-COPY build.gradle.kts settings.gradle.kts .
-RUN ./gradlew dependencies --no-daemon
-COPY src src
-RUN ./gradlew bootJar --no-daemon
-
-FROM eclipse-temurin:21-jre-alpine
-WORKDIR /app
-COPY --from=build /app/build/libs/*.jar app.jar
-EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
-```
-
-### Build Image
-
-```powershell
-docker build -t us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest .
-```
-
-> First build takes ~5-6 minutes. Use `--no-cache` flag to force a full rebuild after dependency changes:
-> ```powershell
-> docker build --no-cache -t us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest .
-> ```
-
-### Push Image
-
-```powershell
-docker push us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest
+# Delete
+curl -X DELETE http://localhost:8081/api/users/1
 ```
 
 ---
 
-## 12. Create Service Account and Grant Permissions
+## 12. Testing
 
-Cloud Run needs a dedicated service account with permission to access Cloud SQL and Secret Manager.
+### Run all tests
 
-### Create Service Account
-
-```powershell
-gcloud iam service-accounts create service-dev-sa `
-  --display-name="Service Dev SA" `
-  --project=service-dev-499704
+```bash
+./gradlew test
 ```
 
-### Grant Cloud SQL Access
+### Test layers
 
-```powershell
-gcloud projects add-iam-policy-binding service-dev-499704 `
-  --member="serviceAccount:service-dev-sa@service-dev-499704.iam.gserviceaccount.com" `
-  --role="roles/cloudsql.client"
+#### UserServiceTest — Pure unit test
+
+Uses Mockito to mock `UserDao`. Tests business logic in isolation with no Spring context and no database.
+
+```
+covers: create, findAll, findById, findById (not found), update, delete
 ```
 
-### Grant Secret Manager Access
+#### UserDaoTest — JDBC slice test
 
-```powershell
-gcloud projects add-iam-policy-binding service-dev-499704 `
-  --member="serviceAccount:service-dev-sa@service-dev-499704.iam.gserviceaccount.com" `
-  --role="roles/secretmanager.secretAccessor"
+Uses `@JdbcTest` with an in-memory H2 database. Tests real SQL execution without needing PostgreSQL running. Flyway is disabled and the schema is created via `@Sql`.
+
+```
+covers: insert, findAll, findById, findById (empty), update, deleteById
 ```
 
-### Grant Logging Access (for viewing logs in GCP Console)
+#### UserControllerTest — Web layer slice test
 
-```powershell
-gcloud projects add-iam-policy-binding service-dev-499704 `
-  --member="user:hamid.iqbal.khan37@gmail.com" `
-  --role="roles/logging.viewer"
+Uses `@WebMvcTest` — starts only the web layer. `UserService` is mocked with `@MockitoBean`. Tests HTTP status codes, JSON serialization, and routing.
+
 ```
-
----
-
-## 13. Deploy to Cloud Run
-
-```powershell
-gcloud run deploy service-dev `
-  --image=us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest `
-  --region=us-central1 `
-  --platform=managed `
-  --allow-unauthenticated `
-  --service-account=service-dev-sa@service-dev-499704.iam.gserviceaccount.com `
-  --add-cloudsql-instances=service-dev-499704:us-central1:service-dev-db `
-  --set-env-vars="INSTANCE_CONNECTION_NAME=service-dev-499704:us-central1:service-dev-db" `
-  --set-secrets="DB_PASS=db-pass:latest,DB_USER=db-user:latest,DB_NAME=db-name:latest" `
-  --memory=512Mi `
-  --cpu=1 `
-  --port=8080 `
-  --project=service-dev-499704
-```
-
-Expected output:
-```
-Service [service-dev] revision [service-dev-00002-fpv] has been deployed and is serving 100 percent of traffic.
-Service URL: https://service-dev-1007977084712.us-central1.run.app
-```
-
-### Redeployment (after code changes)
-
-After any code change, rebuild the image with `--no-cache`, push, then redeploy with a simplified command:
-
-```powershell
-docker build --no-cache -t us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest .
-docker push us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest
-gcloud run deploy service-dev `
-  --image=us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev:latest `
-  --region=us-central1 `
-  --project=service-dev-499704
+covers: POST 201, GET 200, GET by ID 200, PUT 200, DELETE 200
 ```
 
 ---
 
-## 14. Connect DBeaver to Cloud SQL
+## 13. Verifying Data
 
-Cloud SQL does not accept direct TCP connections from the internet. Use the **Cloud SQL Auth Proxy** to create a secure local tunnel.
-
-### Step 1 — Run the Proxy
-
-Open a **dedicated PowerShell window** and run (keep it open):
-
-```powershell
-& "C:\Users\admin\Downloads\cloud-sql-proxy.exe.exe" --port=5433 service-dev-499704:us-central1:service-dev-db
-```
-
-Expected output:
-```
-2026/06/17 11:28:16 Authorizing with Application Default Credentials
-2026/06/17 11:28:16 [service-dev-499704:us-central1:service-dev-db] Listening on 127.0.0.1:5433
-2026/06/17 11:28:16 The proxy has started successfully and is ready for new connections!
-```
-
-> Keep this window open whenever you use DBeaver. Closing it drops the database connection.
-
-### Step 2 — Connect in DBeaver
-
-1. Open DBeaver
-2. Click **New Database Connection** (plug `+` icon)
-3. Select **PostgreSQL** → click **Next**
-4. Enter connection details:
+### DBeaver — Local PostgreSQL
 
 | Field | Value |
-|-------|-------|
-| Host | `127.0.0.1` |
-| Port | `5433` |
+|---|---|
+| Host | `localhost` |
+| Port | `5432` |
 | Database | `postgres` |
 | Username | `postgres` |
 | Password | `postgres` |
 
-5. Click **Test Connection** — download the PostgreSQL driver if prompted
-6. Click **Finish**
+### DBeaver — Cloud SQL (proxy must be running)
 
-### Step 3 — Browse Data
+| Field | Value |
+|---|---|
+| Host | `127.0.0.1` |
+| Port | `5433` |
+| Database | `appdb` |
+| Username | `postgres` |
+| Password | your Cloud SQL password |
 
-Navigate in the left panel:
-```
-postgres → Schemas → public → Tables → users
-```
+### SQL verification queries
 
-Right-click `users` → **View Data** to see all rows.
+```sql
+-- See all users
+SELECT * FROM users;
 
----
+-- Check Flyway ran successfully
+SELECT * FROM flyway_schema_history;
 
-## 15. Swagger UI — API Documentation and Testing
-
-### Dependency Added
-
-The following dependency was added to `build.gradle.kts`:
-
-```kotlin
-implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.9")
-```
-
-### Access Swagger UI
-
-Open in your browser:
-```
-https://service-dev-1007977084712.us-central1.run.app/swagger-ui/index.html
+-- Count users
+SELECT COUNT(*) FROM users;
 ```
 
-> The root URL `/` returns a Whitelabel 404 page — this is normal. Always navigate directly to `/swagger-ui/index.html`.
+### Important: Local and Cloud SQL are independent
 
-### How to Test in Swagger UI
+Local PostgreSQL and Cloud SQL are completely separate databases. Data goes only to whichever `spring.datasource.url` is active in `application.properties`. They do not sync.
 
-1. Open the Swagger URL above
-2. Click on any endpoint (e.g. `POST /api/users`) to expand it
-3. Click **"Try it out"**
-4. Fill in the request body or parameters
-5. Click **"Execute"**
-6. View the response below
+### View logs in GCP
 
----
+GCP Console → **Logging** → **Logs Explorer**:
 
-## 16. API Endpoints Reference
-
-Base URL: `https://service-dev-1007977084712.us-central1.run.app`
-
----
-
-### POST /api/users — Create a User
-
-**Request Body:**
-```json
-{
-  "name": "John Doe"
-}
 ```
-
-**PowerShell:**
-```powershell
-Invoke-WebRequest -UseBasicParsing -Method POST `
-  -Uri "https://service-dev-1007977084712.us-central1.run.app/api/users" `
-  -Headers @{"Content-Type"="application/json"} `
-  -Body '{"name":"John Doe"}'
-```
-
-**Success Response (200):**
-```json
-{
-  "id": 1,
-  "name": "John Doe"
-}
+resource.type="cloudsql_database"
+resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
 ```
 
 ---
 
-### GET /api/users — Get All Users
+## 14. Cloud Run Deployment
 
-**PowerShell:**
-```powershell
-Invoke-WebRequest -UseBasicParsing `
-  -Uri "https://service-dev-1007977084712.us-central1.run.app/api/users"
-```
-
-**Success Response (200):**
-```json
-[
-  {
-    "id": 1,
-    "name": "John Doe"
-  },
-  {
-    "id": 2,
-    "name": "Jane Doe"
-  }
-]
-```
-
----
-
-### GET /api/users/{id} — Get User by ID
-
-**PowerShell:**
-```powershell
-Invoke-WebRequest -UseBasicParsing `
-  -Uri "https://service-dev-1007977084712.us-central1.run.app/api/users/1"
-```
-
-**Success Response (200):**
-```json
-{
-  "id": 1,
-  "name": "John Doe"
-}
-```
-
-**Error Response (500 — user not found):**
-```json
-{
-  "message": "User not found"
-}
-```
-
----
-
-### PUT /api/users/{id} — Update a User
-
-**Request Body:**
-```json
-{
-  "name": "John Updated"
-}
-```
-
-**PowerShell:**
-```powershell
-Invoke-WebRequest -UseBasicParsing -Method PUT `
-  -Uri "https://service-dev-1007977084712.us-central1.run.app/api/users/1" `
-  -Headers @{"Content-Type"="application/json"} `
-  -Body '{"name":"John Updated"}'
-```
-
-**Success Response (200):**
-```json
-{
-  "id": 1,
-  "name": "John Updated"
-}
-```
-
----
-
-### DELETE /api/users/{id} — Delete a User
-
-**PowerShell:**
-```powershell
-Invoke-WebRequest -UseBasicParsing -Method DELETE `
-  -Uri "https://service-dev-1007977084712.us-central1.run.app/api/users/1"
-```
-
-**Success Response (200):**
-```
-User deleted successfully
-```
-
----
-
-## 17. Infrastructure Summary
-
-| Component | Details |
-|-----------|---------|
-| **Project ID** | `service-dev-499704` |
-| **Region** | `us-central1` |
-| **Cloud Run Service** | `service-dev` |
-| **Service URL** | `https://service-dev-1007977084712.us-central1.run.app` |
-| **Swagger UI** | `https://service-dev-1007977084712.us-central1.run.app/swagger-ui/index.html` |
-| **Cloud SQL Instance** | `service-dev-db` (PostgreSQL 15, db-f1-micro) |
-| **Instance Connection Name** | `service-dev-499704:us-central1:service-dev-db` |
-| **Database Name** | `postgres` |
-| **DB User** | `postgres` |
-| **Artifact Registry** | `us-central1-docker.pkg.dev/service-dev-499704/service-dev-repo/service-dev` |
-| **Service Account** | `service-dev-sa@service-dev-499704.iam.gserviceaccount.com` |
-| **Secrets** | `db-pass`, `db-user`, `db-name` (Secret Manager) |
-
-### Cost Estimate
-
-| Service | Free Tier / Cost |
-|---------|-----------------|
-| Cloud Run | 2 million requests/month free, scales to zero |
-| Cloud SQL db-f1-micro | ~$7/month (not free tier) |
-| Artifact Registry | 500 MB storage free |
-| Secret Manager | 6 active secret versions free |
-
----
-
-## application.properties Configuration
+### Step 1 — Switch to Cloud SQL Socket Factory in application.properties
 
 ```properties
-spring.application.name=service-dev
-
-spring.datasource.url=jdbc:postgresql:///${DB_NAME:postgres}?cloudSqlInstance=${INSTANCE_CONNECTION_NAME:}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+spring.datasource.url=jdbc:postgresql:///${DB_NAME:appdb}?cloudSqlInstance=${INSTANCE_CONNECTION_NAME:}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
 spring.datasource.username=${DB_USER:postgres}
-spring.datasource.password=${DB_PASS:postgres}
-
-spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=true
-spring.jpa.properties.hibernate.format_sql=true
-
-logging.level.org.hibernate.SQL=DEBUG
-logging.level.org.hibernate.orm.jdbc.bind=TRACE
+spring.datasource.password=${DB_PASS:}
 ```
 
-The environment variables `DB_NAME`, `DB_USER`, `DB_PASS`, and `INSTANCE_CONNECTION_NAME` are injected at runtime from Secret Manager and Cloud Run environment variables — no hardcoded credentials in the codebase.
+### Step 2 — Uncomment socket factory in build.gradle.kts
+
+```kotlin
+implementation("com.google.cloud.sql:postgres-socket-factory:1.21.0")
+```
+
+### Step 3 — Build and push Docker image
+
+```bash
+gcloud builds submit --tag gcr.io/spring-boot-app-with-cloud-sql/spring-boot-app
+```
+
+### Step 4 — Deploy to Cloud Run
+
+```bash
+gcloud run deploy spring-boot-app \
+  --image gcr.io/spring-boot-app-with-cloud-sql/spring-boot-app \
+  --platform managed \
+  --region us-central1 \
+  --add-cloudsql-instances spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance \
+  --set-env-vars INSTANCE_CONNECTION_NAME=spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance \
+  --set-env-vars DB_NAME=appdb \
+  --set-env-vars DB_USER=postgres \
+  --set-env-vars DB_PASS=YOUR_PASSWORD
+```
+
+---
+
+## 15. Coding Standards
+
+This project follows O'Reilly enterprise coding standards:
+
+| Rule | Detail |
+|---|---|
+| No Lombok | Getters, setters, constructors written explicitly |
+| No direct Hibernate | Spring JDBC used instead of JPA |
+| Constructor injection | Never field-level `@Autowired` |
+| `@ResponseStatus` | POST returns `201 Created`, all others `200 OK` |
+| `@RestController` | All controller classes |
+| `@Service` | All service classes |
+| `@Repository` | All DAO classes — enables exception translation |
+| Config in `config` package | Annotated with `@Configuration` |
+| Named parameters | `NamedParameterJdbcTemplate` over positional `?` |
+| Flyway constraint naming | `TABLE_PK`, `TABLE_FK`, `TABLE_COL_IDX` |
+| Spotless | Google Java Format enforced on every build |
+| `implementation` scope | Never deprecated `compile` |
