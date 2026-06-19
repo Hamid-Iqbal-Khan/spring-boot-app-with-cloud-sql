@@ -4,6 +4,7 @@ import com.cloud.sql.spring_boot_app_with_cloud_sql.dto.RebateResponse;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.entity.SubscriptionType;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.entity.User;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.repo.UserDao;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -50,7 +51,8 @@ public class UserService {
     List<String> reasons = new ArrayList<>();
 
     if (user.getSubscribeDate() != null) {
-      long years = ChronoUnit.YEARS.between(user.getSubscribeDate(), LocalDate.now());
+      long years =
+          ChronoUnit.YEARS.between(user.getSubscribeDate(), LocalDate.now(Clock.systemUTC()));
       if (years >= 1) {
         rebate += 10.0;
         reasons.add("10% loyalty rebate (subscribed for over 1 year)");

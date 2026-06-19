@@ -16,6 +16,7 @@ import com.cloud.sql.spring_boot_app_with_cloud_sql.entity.User;
 import com.cloud.sql.spring_boot_app_with_cloud_sql.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
+import java.time.Month;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -94,7 +95,7 @@ class UserControllerTest {
             1,
             "Alice",
             "PREMIUM",
-            LocalDate.of(2022, 1, 1),
+            LocalDate.of(2022, Month.JANUARY, 1),
             30.0,
             "10% loyalty rebate (subscribed for over 1 year) + 20% Premium plan rebate. Total: 30% off renewal.");
     when(userService.calculateRebate(1)).thenReturn(response);
