@@ -36,7 +36,7 @@ A production-ready Spring Boot 4.1.0 REST API that persists data to Cloud SQL (P
 | Runtime | Google Cloud Run |
 | API Docs | SpringDoc OpenAPI (Swagger UI) |
 | Coverage | JaCoCo |
-| Static Analysis | SonarCloud (org.sonarqube 6.0.1.5171) |
+| Static Analysis | SonarCloud (org.sonarqube 6.2.0.5505) |
 | Formatting | Spotless (Google Java Format) |
 
 **No Lombok. No JPA/Hibernate.** Plain POJOs, manual getters/setters, constructor injection.
@@ -72,6 +72,7 @@ src/
 
 src/test/java/
 ├── controller/UserControllerTest.java  # 6 tests (@WebMvcTest)
+├── repo/UserRowMapperTest.java         # 2 tests (mocked ResultSet — LocalDate mapping)
 └── service/UserServiceTest.java        # 11 tests (Mockito)
 ```
 
@@ -221,7 +222,7 @@ ORDER BY subscribe_date;
 ./gradlew test
 ```
 
-**17 tests total** — 6 controller (`@WebMvcTest`) + 11 service (Mockito). H2 in-memory database has been fully removed; no DAO integration tests exist.
+**19 tests total** — 6 controller (`@WebMvcTest`) + 11 service (Mockito) + 2 repo (`UserRowMapperTest` with mocked `ResultSet`). H2 in-memory database has been fully removed; no DAO integration tests exist.
 
 Coverage report after test run: `build/reports/jacoco/test/html/index.html`
 
@@ -241,23 +242,44 @@ Coverage report after test run: `build/reports/jacoco/test/html/index.html`
 
 ### SonarCloud (static analysis + coverage)
 
-1. Set your SonarCloud token:
+**Organization:** `spring-boot-app-with-cloud-sq`
+**Project key:** `spring-boot-app-with-cloud-sql`
+**Dashboard:** `https://sonarcloud.io/project/overview?id=spring-boot-app-with-cloud-sql`
+
+**Current quality metrics:**
+
+| Metric | Status |
+|--------|--------|
+| Open Issues | 0 |
+| Coverage (overall) | ~60% |
+| Duplications | 0.0% |
+| Security Rating | A |
+| Reliability Rating | A |
+| Maintainability Rating | A |
+
+**Exclusions** (not analysed): `**/config/**`, `**/dto/**`, `**/entity/**`
+
+**Dependency locking** is enabled — `gradle.lockfile` pins all transitive dependency versions, satisfying SonarCloud's reproducible-build security requirement.
+
+To run a fresh analysis:
+
+1. Set your SonarCloud token (never put this in code):
 
 ```powershell
 $env:SONAR_TOKEN = "your_token_here"
 ```
 
-2. Update `sonar.organization` in [build.gradle.kts](build.gradle.kts) with your SonarCloud org key.
-
-3. Run analysis:
+2. Run the full pipeline (clean → test → coverage → sonar):
 
 ```bash
-./gradlew test jacocoTestReport sonar --info
+./gradlew clean test jacocoTestReport sonar
 ```
 
-Results: `https://sonarcloud.io/project/overview?id=spring-boot-app-with-cloud-sql`
+To generate/update the dependency lockfile (run when dependencies change):
 
-**Exclusions** (not analysed): `**/config/**`, `**/dto/**`, `**/entity/**`
+```bash
+./gradlew dependencies --write-locks
+```
 
 ---
 
