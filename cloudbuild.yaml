@@ -1,0 +1,51 @@
+steps:
+  # Build the Docker image
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+      - .
+
+  # Push both tags to Artifact Registry
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}
+
+  # Deploy to Cloud Run
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      - --add-cloudsql-instances=${PROJECT_ID}:${_REGION}:${_SQL_INSTANCE}
+      - --set-env-vars=SPRING_PROFILES_ACTIVE=cloudrun
+      - --set-env-vars=INSTANCE_CONNECTION_NAME=${PROJECT_ID}:${_REGION}:${_SQL_INSTANCE}
+      - --set-env-vars=DB_NAME=${_DB_NAME}
+      - --set-env-vars=DB_USER=${_DB_USER}
+      - --set-secrets=DB_PASS=${_SECRET_NAME}:latest
+      - --service-account=${_SA_EMAIL}
+      - --allow-unauthenticated
+
+substitutions:
+  _REGION: us-central1
+  _REPO: spring-boot-repo
+  _IMAGE: spring-boot-app
+  _SERVICE: spring-boot-app
+  _SQL_INSTANCE: my-postgres-instance
+  _DB_NAME: appdb
+  _DB_USER: postgres
+  _SECRET_NAME: db-password
+  _SA_EMAIL: spring-boot-sa@PROJECT_ID.iam.gserviceaccount.com
+  _TAG: latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

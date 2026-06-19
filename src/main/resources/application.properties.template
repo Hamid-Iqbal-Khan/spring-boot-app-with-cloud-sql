@@ -1,0 +1,25 @@
+# Copy this file to application.properties and fill in your values.
+# application.properties is git-ignored and must never be committed.
+
+spring.application.name=spring-boot-app-with-cloud-sql
+server.forward-headers-strategy=framework
+server.port=8081
+
+# --- Local PostgreSQL ---
+#spring.datasource.url=jdbc:postgresql://localhost:5432/postgres
+#spring.datasource.username=postgres
+#spring.datasource.password=YOUR_LOCAL_PASSWORD
+
+# --- Cloud SQL via Auth Proxy (local dev) ---
+spring.datasource.url=jdbc:postgresql://127.0.0.1:5433/appdb
+spring.datasource.username=postgres
+spring.datasource.password=YOUR_CLOUD_SQL_PASSWORD
+
+spring.flyway.enabled=true
+spring.flyway.locations=classpath:db/migration
+
+# Logging (remove or set to INFO in production)
+logging.level.org.springframework.web=DEBUG
+logging.level.org.springframework.jdbc.core=DEBUG
+logging.level.org.springframework.jdbc.core.StatementCreatorUtils=TRACE
+logging.level.org.springframework.web.filter.CommonsRequestLoggingFilter=DEBUG

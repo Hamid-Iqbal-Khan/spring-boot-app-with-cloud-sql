@@ -1,1164 +1,512 @@
-# Spring Boot App with Cloud SQL
+# Spring Boot REST API with Cloud SQL (PostgreSQL) + Cloud Run
 
-A production-ready Spring Boot REST API demonstrating clean architecture using **Spring JDBC** (no JPA/Hibernate), **Flyway** database migrations, **Spotless** code formatting, subscription plan management with rebate logic, request/query logging, and connectivity to **Google Cloud SQL PostgreSQL** — designed for deployment on **Cloud Run**.
+A production-ready Spring Boot 4.1.0 REST API that persists data to Cloud SQL (PostgreSQL) on Google Cloud Run. Features Flyway migrations, rebate calculation logic, Swagger UI, JaCoCo coverage, and SonarCloud integration.
 
 ---
 
 ## Table of Contents
 
-1. [Project Overview](#1-project-overview)
-2. [Tech Stack](#2-tech-stack)
-3. [Project Structure](#3-project-structure)
-4. [Architecture and Design Decisions](#4-architecture-and-design-decisions)
-5. [JDBC Template — Deep Dive](#5-jdbc-template--deep-dive)
-6. [Flyway Database Migrations](#6-flyway-database-migrations)
-7. [Rebate Logic](#7-rebate-logic)
-8. [Logging Setup](#8-logging-setup)
-9. [Spotless Code Formatting](#9-spotless-code-formatting)
-10. [Local Development Setup](#10-local-development-setup)
-11. [Google Cloud SQL Setup](#11-google-cloud-sql-setup)
-12. [Running the Application](#12-running-the-application)
-13. [API Reference](#13-api-reference)
-14. [Testing the APIs](#14-testing-the-apis)
-15. [Verifying Data with Logging](#15-verifying-data-with-logging)
-16. [Test Suite](#16-test-suite)
-17. [Cloud Run Deployment](#17-cloud-run-deployment)
-18. [Coding Standards](#18-coding-standards)
-19. [Troubleshooting](#19-troubleshooting)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Domain: Rebate Logic](#domain-rebate-logic)
+- [API Endpoints](#api-endpoints)
+- [Database Migrations](#database-migrations)
+- [Running Locally](#running-locally)
+- [Running Tests](#running-tests)
+- [Code Quality (Spotless + SonarCloud)](#code-quality-spotless--sonarcloud)
+- [GCP Setup: Dashboard + CLI](#gcp-setup-dashboard--cli)
+- [Deploy to Cloud Run](#deploy-to-cloud-run)
+- [Verify the Deployment](#verify-the-deployment)
+- [Redeploy](#redeploy)
 
 ---
 
-## 1. Project Overview
+## Tech Stack
 
-This project exposes a **User CRUD REST API** backed by PostgreSQL. Each user has a subscription plan and subscription dates. The API includes a rebate calculation endpoint that rewards long-standing and premium subscribers.
+| Layer | Technology |
+|-------|------------|
+| Framework | Spring Boot 4.1.0 (Spring Framework 7.0.8) |
+| Language | Java 21 |
+| Database | PostgreSQL (Cloud SQL) |
+| Data Access | Spring JDBC — `NamedParameterJdbcTemplate` |
+| Migrations | Flyway |
+| Build | Gradle (Kotlin DSL) |
+| Container | Docker (multi-stage, Eclipse Temurin 21) |
+| CI/CD | Google Cloud Build |
+| Runtime | Google Cloud Run |
+| API Docs | SpringDoc OpenAPI (Swagger UI) |
+| Coverage | JaCoCo |
+| Static Analysis | SonarCloud (org.sonarqube 6.0.1.5171) |
+| Formatting | Spotless (Google Java Format) |
 
-Built following strict enterprise coding standards:
-
-- No Lombok — all boilerplate written explicitly
-- No JPA/Hibernate — uses Spring JDBC with `NamedParameterJdbcTemplate`
-- Constructor injection throughout — no field-level `@Autowired`
-- Flyway manages all schema changes — no `ddl-auto=update`
-- Spotless enforces Google Java Format on every build
-- Full logging — HTTP requests and SQL statements visible in console and GCP Logs Explorer
-- Full test coverage across three layers — service (Mockito), DAO (`@JdbcTest`), controller (`@WebMvcTest`)
-
----
-
-## 2. Tech Stack
-
-| Technology | Version | Purpose |
-|---|---|---|
-| Java | 21 | Language |
-| Spring Boot | 4.1.0 | Application framework |
-| Spring Framework | 7.0.8 | Core framework (shipped with Spring Boot 4) |
-| Spring JDBC | 7.0.8 | Database access via `NamedParameterJdbcTemplate` |
-| Flyway | bundled via Boot | Database schema version control |
-| PostgreSQL | 16 | Relational database |
-| Google Cloud SQL | — | Managed PostgreSQL on GCP |
-| Cloud SQL Auth Proxy | latest | Secure tunnel for local-to-Cloud SQL connections |
-| Spotless | 7.0.4 | Code formatting — Google Java Format |
-| SpringDoc OpenAPI | 2.8.9 | Swagger UI |
-| JUnit 5 + Mockito | — | Unit and slice testing |
-| Gradle | 9.5.1 | Build tool |
-| H2 | — | In-memory DB for DAO tests |
+**No Lombok. No JPA/Hibernate.** Plain POJOs, manual getters/setters, constructor injection.
 
 ---
 
-## 3. Project Structure
+## Project Structure
 
 ```
-spring-boot-app-with-cloud-sql/
-├── src/
-│   ├── main/
-│   │   ├── java/com/cloud/sql/spring_boot_app_with_cloud_sql/
-│   │   │   ├── SpringBootAppWithCloudSqlApplication.java    # Entry point
-│   │   │   ├── config/
-│   │   │   │   ├── JacksonConfig.java                       # ObjectMapper — LocalDate as ISO string
-│   │   │   │   ├── JdbcConfig.java                         # NamedParameterJdbcTemplate bean
-│   │   │   │   └── RequestLoggingConfig.java               # CommonsRequestLoggingFilter bean
-│   │   │   ├── controller/
-│   │   │   │   └── UserController.java                     # REST endpoints
-│   │   │   ├── dto/
-│   │   │   │   └── RebateResponse.java                     # Read-only rebate response DTO
-│   │   │   ├── entity/
-│   │   │   │   ├── SubscriptionType.java                   # Enum: BASIC, PREMIUM
-│   │   │   │   └── User.java                               # Plain POJO — no JPA annotations
-│   │   │   ├── repo/
-│   │   │   │   ├── UserDao.java                            # All SQL lives here
-│   │   │   │   └── UserRowMapper.java                      # Maps ResultSet rows → User objects
-│   │   │   └── service/
-│   │   │       └── UserService.java                        # Business logic and rebate calculation
-│   │   └── resources/
-│   │       ├── application.properties                      # Datasource, Flyway, logging (git-ignored)
-│   │       └── db/migration/
-│   │           ├── V1__create_users_table.sql
-│   │           └── V2__add_subscription_fields_to_users.sql
-│   └── test/
-│       └── java/com/cloud/sql/spring_boot_app_with_cloud_sql/
-│           ├── controller/UserControllerTest.java
-│           ├── repo/UserDaoTest.java
-│           └── service/UserServiceTest.java
-├── build.gradle.kts
-├── settings.gradle.kts
-├── Dockerfile
-└── .gitignore
+src/
+├── main/java/com/cloud/sql/spring_boot_app_with_cloud_sql/
+│   ├── config/
+│   │   ├── JacksonConfig.java          # ObjectMapper bean — LocalDate ISO-8601
+│   │   ├── JdbcConfig.java             # NamedParameterJdbcTemplate bean
+│   │   └── RequestLoggingConfig.java   # CommonsRequestLoggingFilter (HTTP body logging)
+│   ├── controller/UserController.java  # CRUD + /rebate endpoint
+│   ├── dto/RebateResponse.java         # Immutable response DTO
+│   ├── entity/
+│   │   ├── User.java                   # id, name, plan, subscribe_date, unsubscribe_date
+│   │   └── SubscriptionType.java       # Enum: BASIC, PREMIUM
+│   ├── repo/
+│   │   ├── UserDao.java                # SQL queries via NamedParameterJdbcTemplate
+│   │   └── UserRowMapper.java          # ResultSet -> User
+│   └── service/UserService.java        # Business logic + calculateRebate()
+└── main/resources/
+    ├── application.properties          # Local profile (gitignored — contains credentials)
+    ├── application.properties.template # Safe committed template (no credentials)
+    ├── application-cloudrun.properties # Cloud Run profile (Socket Factory)
+    └── db/migration/
+        ├── V1__create_users_table.sql
+        ├── V2__add_subscription_fields_to_users.sql
+        └── V3__seed_users.sql
+
+src/test/java/
+├── controller/UserControllerTest.java  # 6 tests (@WebMvcTest)
+└── service/UserServiceTest.java        # 11 tests (Mockito)
 ```
 
 ---
 
-## 4. Architecture and Design Decisions
-
-### Why Spring JDBC instead of JPA/Hibernate?
-
-The coding standards explicitly prohibit adding Hibernate as a direct dependency. Spring JDBC was chosen because:
-
-- **Full SQL control** — you write exactly what hits the database, no generated queries
-- **No magic** — no lazy loading, no N+1 query problems, no entity state machine
-- **Lighter** — no entity manager, no persistence context, no proxy objects
-- **Auditable** — every query is visible in one place (`UserDao`), making code reviews straightforward
-
-### Request flow through layers
-
-```
-HTTP Request
-     │
-     ▼
-RequestLoggingFilter  ← logs every incoming request (method, URL, body) before it reaches the controller
-     │
-     ▼
-UserController        ← routing, request parsing, HTTP status codes
-     │
-     ▼
-UserService           ← business logic: rebate calculation, validation, orchestration
-     │                  never touches JdbcTemplate directly
-     ▼
-UserDao               ← all SQL lives here; uses NamedParameterJdbcTemplate
-     │
-     ▼
-UserRowMapper         ← translates one ResultSet row into one User object
-     │
-     ▼
-PostgreSQL / Cloud SQL
-```
-
-### Why constructor injection?
-
-Field injection hides dependencies and makes testing without a Spring context impossible. Constructor injection makes dependencies explicit, allows direct instantiation in unit tests, and makes fields `final`.
-
-```java
-// Avoid — hidden dependency, untestable without Spring
-@Autowired
-private UserDao userDao;
-
-// Correct — explicit, testable, immutable
-public UserService(UserDao userDao) {
-  this.userDao = userDao;
-}
-```
-
-### Why a DTO for the rebate response?
-
-`RebateResponse` carries computed fields (`rebatePercentage`, `message`) that have no place in the database entity. Keeping computed output separate from the domain model is a core clean-architecture principle.
-
----
-
-## 5. JDBC Template — Deep Dive
-
-### What is JdbcTemplate?
-
-`JdbcTemplate` is Spring's JDBC abstraction. It eliminates the boilerplate of opening connections, preparing statements, translating checked exceptions, and closing resources.
-
-**Raw JDBC — 20+ lines for one query:**
-
-```java
-Connection conn = null;
-PreparedStatement ps = null;
-ResultSet rs = null;
-try {
-    conn = dataSource.getConnection();
-    ps = conn.prepareStatement("SELECT * FROM users WHERE id = ?");
-    ps.setInt(1, id);
-    rs = ps.executeQuery();
-    if (rs.next()) {
-        return new User(rs.getInt("id"), rs.getString("name"));
-    }
-} catch (SQLException e) {
-    throw new RuntimeException(e);
-} finally {
-    if (rs != null) rs.close();
-    if (ps != null) ps.close();
-    if (conn != null) conn.close();
-}
-```
-
-**With NamedParameterJdbcTemplate — 3 lines:**
-
-```java
-jdbcTemplate.query(
-    "SELECT id, name FROM users WHERE id = :id",
-    Map.of("id", id),
-    rowMapper);
-```
-
-### JdbcTemplate vs NamedParameterJdbcTemplate
-
-| | `JdbcTemplate` | `NamedParameterJdbcTemplate` |
-|---|---|---|
-| Parameter style | `?` positional | `:paramName` named |
-| Order-sensitive | Yes — wrong order = silent data corruption | No |
-| Readability | Low on multi-param queries | High — self-documenting |
-
-This project uses `NamedParameterJdbcTemplate` exclusively.
-
-### JdbcConfig.java
-
-```java
-@Configuration
-public class JdbcConfig {
-
-  @Bean
-  public NamedParameterJdbcTemplate namedParameterJdbcTemplate(DataSource dataSource) {
-    return new NamedParameterJdbcTemplate(dataSource);
-  }
-}
-```
-
-Spring Boot auto-configures a `DataSource` from `application.properties`. This bean wraps it in `NamedParameterJdbcTemplate`, making it injectable throughout the application.
-
-### JacksonConfig.java
-
-```java
-@Configuration
-public class JacksonConfig {
-
-  @Bean
-  public ObjectMapper objectMapper() {
-    return new ObjectMapper()
-        .registerModule(new JavaTimeModule())
-        .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-  }
-}
-```
-
-Without this, Jackson serializes `LocalDate` as `[2024,1,15]`. With `JavaTimeModule` and timestamps disabled it serializes as `"2024-01-15"`.
-
-> Spring Boot 4 uses Jackson 3.x internally. The property `spring.jackson.serialization.write-dates-as-timestamps=false` fails to bind because the relaxed property binder cannot resolve the enum against the new `tools.jackson` package. Configuring via a `@Bean` bypasses this and works reliably.
-
-### UserRowMapper.java
-
-```java
-@Component
-public class UserRowMapper implements RowMapper<User> {
-
-  @Override
-  public User mapRow(ResultSet rs, int rowNum) throws SQLException {
-    LocalDate subscribeDate = toLocalDate(rs.getDate("subscribe_date"));
-    LocalDate unsubscribeDate = toLocalDate(rs.getDate("unsubscribe_date"));
-    return new User(
-        rs.getInt("id"),
-        rs.getString("name"),
-        rs.getString("plan"),
-        subscribeDate,
-        unsubscribeDate);
-  }
-
-  private LocalDate toLocalDate(Date date) {
-    return date != null ? date.toLocalDate() : null;
-  }
-}
-```
-
-`RowMapper<T>` is called once per row. `rs.getDate()` returns `java.sql.Date` — the helper converts it to `java.time.LocalDate`. The null check is essential because SQL `NULL` maps to Java `null`, not a zero date.
-
-### UserDao.java — all SQL in one place
-
-```java
-@Repository
-public class UserDao {
-
-  private static final String SELECT_ALL =
-      "SELECT id, name, plan, subscribe_date, unsubscribe_date FROM users";
-}
-```
-
-`@Repository` enables Spring's persistence exception translation — raw `SQLException` is automatically converted to a meaningful `DataAccessException` subclass (`DuplicateKeyException`, `BadSqlGrammarException`, etc.).
-
-#### INSERT with generated key
-
-```java
-public User insert(User user) {
-  String sql =
-      "INSERT INTO users (name, plan, subscribe_date, unsubscribe_date)"
-          + " VALUES (:name, :plan, :subscribeDate, :unsubscribeDate)";
-  KeyHolder keyHolder = new GeneratedKeyHolder();
-  jdbcTemplate.update(sql, buildParams(user), keyHolder, new String[]{"id"});
-  user.setId(keyHolder.getKey().intValue());
-  return user;
-}
-```
-
-`GeneratedKeyHolder` captures the `SERIAL` primary key assigned by PostgreSQL after the INSERT.
-
-#### SELECT single row — Optional pattern
-
-```java
-public Optional<User> findById(Integer id) {
-  List<User> results = jdbcTemplate.query(
-      SELECT_ALL + " WHERE id = :id", Map.of("id", id), rowMapper);
-  return results.stream().findFirst();
-}
-```
-
-`queryForObject()` is intentionally avoided — it throws `EmptyResultDataAccessException` when no row is found. Using `query()` + `stream().findFirst()` returns a clean `Optional<User>` that the service converts into a meaningful error message.
-
-#### Centralised parameter builder
-
-```java
-private MapSqlParameterSource buildParams(User user) {
-  return new MapSqlParameterSource()
-      .addValue("name", user.getName())
-      .addValue("plan", user.getPlan())
-      .addValue("subscribeDate", user.getSubscribeDate())
-      .addValue("unsubscribeDate", user.getUnsubscribeDate());
-}
-```
-
-Shared by both `insert()` and `update()`. The update call extends it with `.addValue("id", user.getId())` without duplicating the other fields.
-
-### JdbcTemplate methods reference
-
-| Method | Use case | Returns |
-|---|---|---|
-| `query(sql, params, rowMapper)` | SELECT multiple rows | `List<T>` |
-| `queryForObject(sql, params, rowMapper)` | SELECT exactly one row | `T` (throws if 0 or 2+ rows) |
-| `queryForObject(sql, params, Class)` | SELECT a scalar value | scalar (`Integer`, `String`, …) |
-| `update(sql, params)` | INSERT / UPDATE / DELETE | `int` rows affected |
-| `update(sql, params, keyHolder, cols)` | INSERT capturing generated key | `int`, key in `keyHolder` |
-| `batchUpdate(sql, batchParams[])` | Bulk INSERT / UPDATE | `int[]` |
-
----
-
-## 6. Flyway Database Migrations
-
-Flyway versions schema changes as SQL scripts and applies them in order on startup — like Git for your database.
-
-### How it works
-
-1. Scans `src/main/resources/db/migration/` on every startup
-2. Checks `flyway_schema_history` table to see which versions already ran
-3. Applies any new scripts in version order, each in its own transaction
-4. Aborts startup if a previously applied script has been modified (checksum mismatch)
-
-**Rule**: once a migration has been applied to any real database, never edit it — always create a new version.  
-**Exception**: if it has never been applied anywhere yet, you can safely edit it in place.
-
-### Naming convention
-
-```
-V{version}__{description}.sql
-
-V1__create_users_table.sql
-V2__add_subscription_fields_to_users.sql
-V3__add_email_column.sql    ← next migration you add
-```
-
-### V1__create_users_table.sql
-
-```sql
-CREATE TABLE IF NOT EXISTS users
-(
-    id   SERIAL,
-    name VARCHAR(255) NOT NULL,
-    CONSTRAINT users_pk PRIMARY KEY (id)
-);
-```
-
-### V2__add_subscription_fields_to_users.sql
-
-```sql
-ALTER TABLE users
-    ADD COLUMN plan             VARCHAR(50),
-    ADD COLUMN subscribe_date   DATE,
-    ADD COLUMN unsubscribe_date DATE;
-```
-
-### Verify migrations ran
-
-```sql
-SELECT version, description, success, installed_on
-FROM flyway_schema_history
-ORDER BY installed_rank;
-```
-
----
-
-## 7. Rebate Logic
-
-### Business rules
+## Domain: Rebate Logic
 
 | Condition | Rebate |
-|---|---|
-| Subscribed more than 1 year | +10% |
-| Plan is PREMIUM | +20% |
-| Both conditions met | +30% (stackable, this is the max) |
-| Less than 1 year on BASIC, or no subscribe date | 0% |
+|-----------|--------|
+| PREMIUM plan + subscribed > 1 year | 30% |
+| PREMIUM plan + subscribed <= 1 year | 20% |
+| BASIC plan + subscribed > 1 year | 10% |
+| BASIC plan + subscribed <= 1 year or no date | 0% |
+| Unsubscribed (unsubscribe_date is set) | 0% |
 
-### Implementation
-
-```java
-public RebateResponse calculateRebate(Integer id) {
-  User user = findById(id);
-  double rebate = 0.0;
-  List<String> reasons = new ArrayList<>();
-
-  if (user.getSubscribeDate() != null) {
-    long years = ChronoUnit.YEARS.between(user.getSubscribeDate(), LocalDate.now());
-    if (years >= 1) {
-      rebate += 10.0;
-      reasons.add("10% loyalty rebate (subscribed for over 1 year)");
-    }
-  }
-
-  if (SubscriptionType.PREMIUM.name().equals(user.getPlan())) {
-    rebate += 20.0;
-    reasons.add("20% Premium plan rebate");
-  }
-
-  String message = reasons.isEmpty()
-      ? "No rebate applicable for this account."
-      : String.join(" + ", reasons) + ". Total: " + (int) rebate + "% off renewal.";
-
-  return new RebateResponse(
-      user.getId(), user.getName(), user.getPlan(),
-      user.getSubscribeDate(), rebate, message);
-}
-```
-
-- `ChronoUnit.YEARS.between()` calculates complete elapsed years accurately regardless of leap years
-- `SubscriptionType.PREMIUM.name()` keeps the enum as the single source of truth for plan name strings
-- `RebateResponse` is immutable (all fields `final`) — it is never persisted
+Rebates are **stackable up to 30%** (loyalty 10% + premium 20%).
 
 ---
 
-## 8. Logging Setup
+## API Endpoints
 
-Logging is configured at two levels: **application logs** (what your Spring Boot app prints) and **Cloud SQL logs** (what PostgreSQL records on the server side).
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/users` | List all users |
+| GET | `/api/users/{id}` | Get user by ID |
+| POST | `/api/users` | Create user |
+| PUT | `/api/users/{id}` | Update user |
+| DELETE | `/api/users/{id}` | Delete user |
+| GET | `/api/users/{id}/rebate` | Calculate rebate for user |
+| GET | `/actuator/health` | Health check |
+| GET | `/swagger-ui/index.html` | Swagger UI |
 
-### application.properties — logging properties
+**Live Cloud Run URL:** `https://spring-boot-app-rire725v4q-uc.a.run.app`
 
-```properties
-# Log every incoming HTTP request (method, URL, status code)
-logging.level.org.springframework.web=DEBUG
-
-# Log all SQL statements executed by JdbcTemplate
-logging.level.org.springframework.jdbc.core=DEBUG
-
-# Log SQL parameter values (actual values bound to each query)
-logging.level.org.springframework.jdbc.core.StatementCreatorUtils=TRACE
-
-# Activate the CommonsRequestLoggingFilter bean
-logging.level.org.springframework.web.filter.CommonsRequestLoggingFilter=DEBUG
-```
-
-### RequestLoggingConfig.java
-
-```java
-@Configuration
-public class RequestLoggingConfig {
-
-  @Bean
-  public CommonsRequestLoggingFilter requestLoggingFilter() {
-    CommonsRequestLoggingFilter filter = new CommonsRequestLoggingFilter();
-    filter.setIncludeQueryString(true);
-    filter.setIncludePayload(true);
-    filter.setMaxPayloadLength(1000);
-    filter.setIncludeHeaders(false);
-    filter.setAfterMessagePrefix("REQUEST: ");
-    return filter;
-  }
-}
-```
-
-This bean logs every HTTP request body before it reaches the controller. The `logging.level` property in `application.properties` must also be set to `DEBUG` to activate it.
-
-### What you see in the console
-
-When you call `POST /api/users`:
-
-```
-DEBUG DispatcherServlet       : POST "/api/users", parameters={}
-DEBUG CommonsRequestLoggingFilter : REQUEST: POST /api/users, payload={"name":"Alice","plan":"PREMIUM","subscribeDate":"2023-01-01"}
-DEBUG NamedParameterJdbcTemplate : Executing prepared SQL update
-DEBUG JdbcTemplate            : Executing prepared SQL statement [INSERT INTO users ...]
-TRACE StatementCreatorUtils   : Setting SQL statement parameter value ... value [Alice] ... type [VARCHAR]
-TRACE StatementCreatorUtils   : Setting SQL statement parameter value ... value [PREMIUM] ... type [VARCHAR]
-DEBUG DispatcherServlet       : Completed 201 CREATED
-```
-
-### Enable query logging on Cloud SQL (GCP Console)
-
-By default Cloud SQL only logs errors. To log all queries:
-
-1. GCP Console → **SQL** → click `my-postgres-instance` → **Edit**
-2. Scroll to **Flags** → **Add a database flag**
-3. Add `log_statement` = `all`
-4. Add `log_min_duration_statement` = `0` (logs execution time per query in ms)
-5. Click **Save** — the instance restarts briefly
-
-### View logs in GCP Logs Explorer
-
-GCP Console → **Logging** → **Logs Explorer**
-
-**All database activity:**
-```
-resource.type="cloudsql_database"
-resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
-```
-
-**INSERT / UPDATE / DELETE only:**
-```
-resource.type="cloudsql_database"
-resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
-textPayload=~"INSERT|UPDATE|DELETE"
-```
-
-**Slow queries (over 500ms):**
-```
-resource.type="cloudsql_database"
-resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
-textPayload=~"duration:"
-```
-
-**Connection events (Auth Proxy connect/disconnect):**
-```
-resource.type="cloudsql_database"
-resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
-textPayload=~"connection received|connection authorized|disconnection"
-```
-
-A typical GCP log entry for an insert looks like:
-```
-LOG:  execute <unnamed>: INSERT INTO users (name, plan, subscribe_date, unsubscribe_date)
-      VALUES ($1, $2, $3, $4)
-DETAIL:  parameters: $1 = 'Alice', $2 = 'PREMIUM', $3 = '2023-01-01', $4 = NULL
-```
-
-> For production, set `log_min_duration_statement=500` instead of `log_statement=all`. This logs only queries that take over 500ms, avoiding high log volume.
+Try it now:
+- Health: `https://spring-boot-app-rire725v4q-uc.a.run.app/actuator/health`
+- Users: `https://spring-boot-app-rire725v4q-uc.a.run.app/api/users`
+- Swagger: `https://spring-boot-app-rire725v4q-uc.a.run.app/swagger-ui/index.html`
 
 ---
 
-## 9. Spotless Code Formatting
+## Database Migrations
 
-```bash
-# Format all Java source files
-./gradlew spotlessApply
+Flyway runs automatically on startup. Migrations are in `src/main/resources/db/migration/`.
 
-# Check formatting without modifying files (use in CI)
-./gradlew spotlessCheck
-```
+| Version | File | Description |
+|---------|------|-------------|
+| V1 | `V1__create_users_table.sql` | Create `users` table with `id SERIAL` |
+| V2 | `V2__add_subscription_fields_to_users.sql` | Add `plan`, `subscribe_date`, `unsubscribe_date` |
+| V3 | `V3__seed_users.sql` | 10 seed users covering all rebate scenarios |
 
-Configuration in `build.gradle.kts`:
+### V3 Seed Users
 
-```kotlin
-spotless {
-  java {
-    googleJavaFormat()
-    removeUnusedImports()
-    trimTrailingWhitespace()
-    endWithNewline()
-  }
-}
-```
+| User | Plan | Subscribe Date | Scenario |
+|------|------|----------------|----------|
+| Alice Johnson | PREMIUM | 2022-03-15 | 30% rebate |
+| Bob Smith | PREMIUM | 2021-11-01 | 30% rebate |
+| Carol White | BASIC | 2023-01-20 | 10% rebate |
+| David Brown | BASIC | 2022-08-05 | 10% rebate |
+| Emma Davis | PREMIUM | 2025-12-01 | 20% rebate |
+| Frank Miller | PREMIUM | 2026-02-14 | 20% rebate |
+| Grace Wilson | BASIC | 2026-04-10 | 0% rebate |
+| Henry Moore | BASIC | 2026-01-30 | 0% rebate |
+| Isabella Taylor | BASIC | NULL | 0% rebate |
+| James Anderson | PREMIUM | 2021-06-01 (unsubscribed 2024-12-31) | 0% rebate |
 
-Run `spotlessApply` before every commit. The CI build fails on `spotlessCheck` if any file is unformatted.
+Flyway is idempotent — it tracks applied migrations in `flyway_schema_history` and never re-runs them. Running the app multiple times will not duplicate seed data.
 
 ---
 
-## 10. Local Development Setup
+## Running Locally
 
 ### Prerequisites
 
 - Java 21
-- PostgreSQL 16 installed locally
-- IntelliJ IDEA or any IDE
-- DBeaver (optional — for database inspection)
+- PostgreSQL running locally (or Cloud SQL Auth Proxy)
+- `cloud-sql-proxy.exe` (gitignored — do not commit)
 
-### Step 1 — Start local PostgreSQL
-
-```powershell
-pg_ctl -D "C:\Program Files\PostgreSQL\16\data" start
-```
-
-### Step 2 — Create the database (if not already created)
-
-Connect via psql or DBeaver:
-
-```sql
-CREATE DATABASE postgres;
-CREATE USER postgres WITH PASSWORD 'postgres';
-GRANT ALL PRIVILEGES ON DATABASE postgres TO postgres;
-```
-
-### Step 3 — Create application.properties
-
-This file is git-ignored. Create it at `src/main/resources/application.properties`:
-
-```properties
-spring.application.name=spring-boot-app-with-cloud-sql
-server.forward-headers-strategy=framework
-server.port=8081
-
-spring.datasource.url=jdbc:postgresql://localhost:5432/postgres
-spring.datasource.username=postgres
-spring.datasource.password=postgres
-
-spring.flyway.enabled=true
-spring.flyway.locations=classpath:db/migration
-
-# Logging
-logging.level.org.springframework.web=DEBUG
-logging.level.org.springframework.jdbc.core=DEBUG
-logging.level.org.springframework.jdbc.core.StatementCreatorUtils=TRACE
-logging.level.org.springframework.web.filter.CommonsRequestLoggingFilter=DEBUG
-```
-
-### Step 4 — Build and format
+### 1. Copy the properties template
 
 ```bash
-./gradlew spotlessApply build
+cp src/main/resources/application.properties.template src/main/resources/application.properties
 ```
 
-### Step 5 — Run
+Edit `application.properties` and fill in your local DB credentials. **This file is gitignored and must never be committed.**
 
-```bash
-./gradlew bootRun
-```
-
-Flyway creates the `users` table automatically on first startup.
-
----
-
-## 11. Google Cloud SQL Setup
-
-### Step 1 — Create a Cloud SQL instance
-
-1. GCP Console → **SQL** → **Create Instance** → **PostgreSQL 16**
-2. Instance ID: `my-postgres-instance`
-3. Password: strong password for the `postgres` user
-4. Region: `us-central1`
-5. Availability: Single zone
-6. Click **Create Instance** (takes 3–5 minutes)
-
-### Step 2 — Create the application database
-
-Instance overview → **Databases** → **Create Database** → name: `appdb`
-
-### Step 3 — Note your connection name
-
-From the instance overview page, copy the **Connection name**:
-```
-spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance
-```
-
-### Step 4 — Authorize your public IP
-
-```powershell
-(Invoke-WebRequest -Uri "https://api.ipify.org" -UseBasicParsing).Content
-```
-
-Instance → **Connections** → **Networking** → **Add a Network** → enter `YOUR_IP/32`
-
-> If you get connection refused after some time, your home/office IP may have changed — update this rule.
-
-### Step 5 — Download Cloud SQL Auth Proxy
-
-Download from: https://github.com/GoogleCloudPlatform/cloud-sql-proxy/releases/latest
-
-Download `cloud-sql-proxy.x64.windows.exe`, rename to `cloud-sql-proxy.exe`. This file is in `.gitignore` — do not commit it.
-
-### Step 6 — Authenticate with GCP
-
-```powershell
-gcloud auth application-default login
-```
-
-### Step 7 — Enable query logging on Cloud SQL
-
-GCP Console → **SQL** → `my-postgres-instance` → **Edit** → **Flags**:
-
-| Flag | Value |
-|---|---|
-| `log_statement` | `all` |
-| `log_min_duration_statement` | `0` |
-
-Click **Save**.
-
-### Step 8 — Switch application.properties to Cloud SQL
-
-```properties
-spring.application.name=spring-boot-app-with-cloud-sql
-server.forward-headers-strategy=framework
-server.port=8081
-
-# Cloud SQL via Auth Proxy
-spring.datasource.url=jdbc:postgresql://127.0.0.1:5433/appdb
-spring.datasource.username=postgres
-spring.datasource.password=YOUR_CLOUD_SQL_PASSWORD
-
-spring.flyway.enabled=true
-spring.flyway.locations=classpath:db/migration
-
-# Logging
-logging.level.org.springframework.web=DEBUG
-logging.level.org.springframework.jdbc.core=DEBUG
-logging.level.org.springframework.jdbc.core.StatementCreatorUtils=TRACE
-logging.level.org.springframework.web.filter.CommonsRequestLoggingFilter=DEBUG
-
-# Cloud Run (uncomment when deploying, comment out the proxy block above)
-#spring.datasource.url=jdbc:postgresql:///${DB_NAME:appdb}?cloudSqlInstance=${INSTANCE_CONNECTION_NAME:}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
-#spring.datasource.username=${DB_USER:postgres}
-#spring.datasource.password=${DB_PASS:}
-```
-
----
-
-## 12. Running the Application
-
-### Terminal 1 — Start the Auth Proxy (keep open)
+### 2. Start Cloud SQL Auth Proxy (if connecting to Cloud SQL locally)
 
 ```powershell
 .\cloud-sql-proxy.exe spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance --port=5433
 ```
 
-Expected:
-```
-The proxy has started successfully and is ready for new connections!
-Listening on 127.0.0.1:5433
-```
+The proxy binary is gitignored. Download it from the [cloud-sql-proxy releases](https://github.com/GoogleCloudPlatform/cloud-sql-proxy/releases) page.
 
-### Terminal 2 — Start the application
+### 3. Run the app
 
 ```bash
 ./gradlew bootRun
 ```
 
-Expected:
-```
-o.f.core.internal.command.DbMigrate : Successfully applied 2 migrations to schema "public"
-o.s.b.w.e.tomcat.TomcatWebServer    : Tomcat started on port 8081 (http)
-```
+App starts on `http://localhost:8080`.
 
-### Kill a stuck port if needed
+- Swagger UI: `http://localhost:8080/swagger-ui/index.html`
+- Health: `http://localhost:8080/actuator/health`
 
-```powershell
-netstat -ano | findstr :8081
-taskkill /PID <PID> /F
-```
+### 4. Verify data locally (DBeaver)
 
-### Swagger UI
+Connect DBeaver to Cloud SQL via the proxy:
 
-```
-http://localhost:8081/swagger-ui/index.html
-```
-
----
-
-## 13. API Reference
-
-Base URL: `http://localhost:8081/api/users`
-
-| Method | Endpoint | Status | Description |
-|---|---|---|---|
-| POST | `/api/users` | 201 Created | Create a new user |
-| GET | `/api/users` | 200 OK | Get all users |
-| GET | `/api/users/{id}` | 200 OK | Get user by ID |
-| PUT | `/api/users/{id}` | 200 OK | Update a user |
-| DELETE | `/api/users/{id}` | 200 OK | Delete a user |
-| GET | `/api/users/{id}/rebate` | 200 OK | Calculate renewal rebate |
-
-### User request payload
-
-```json
-{
-  "name": "Alice",
-  "plan": "PREMIUM",
-  "subscribeDate": "2022-06-01",
-  "unsubscribeDate": null
-}
-```
-
-`plan` accepts: `BASIC` or `PREMIUM` (or `null`).  
-Dates use ISO-8601 format: `YYYY-MM-DD`.
-
-### Rebate response shape
-
-```json
-{
-  "userId": 1,
-  "name": "Alice",
-  "plan": "PREMIUM",
-  "subscribeDate": "2022-06-01",
-  "rebatePercentage": 30.0,
-  "message": "10% loyalty rebate (subscribed for over 1 year) + 20% Premium plan rebate. Total: 30% off renewal."
-}
-```
-
----
-
-## 14. Testing the APIs
-
-### Terminal 3 — Run curl commands
-
-#### Create a BASIC user (less than 1 year — no rebate)
-
-```powershell
-curl -X POST http://localhost:8081/api/users `
-  -H "Content-Type: application/json" `
-  -d '{\"name\": \"Alice\", \"plan\": \"BASIC\", \"subscribeDate\": \"2025-12-01\"}'
-```
-
-#### Create a PREMIUM user subscribed over a year ago (30% rebate)
-
-```powershell
-curl -X POST http://localhost:8081/api/users `
-  -H "Content-Type: application/json" `
-  -d '{\"name\": \"Bob\", \"plan\": \"PREMIUM\", \"subscribeDate\": \"2023-01-01\"}'
-```
-
-#### Get all users
-
-```powershell
-curl http://localhost:8081/api/users
-```
-
-#### Get user by ID
-
-```powershell
-curl http://localhost:8081/api/users/1
-```
-
-#### Update a user
-
-```powershell
-curl -X PUT http://localhost:8081/api/users/1 `
-  -H "Content-Type: application/json" `
-  -d '{\"name\": \"Alice\", \"plan\": \"PREMIUM\", \"subscribeDate\": \"2022-01-01\"}'
-```
-
-#### Delete a user
-
-```powershell
-curl -X DELETE http://localhost:8081/api/users/1
-```
-
-#### Calculate rebate — Alice (0%)
-
-```powershell
-curl http://localhost:8081/api/users/1/rebate
-```
-
-#### Calculate rebate — Bob (30%)
-
-```powershell
-curl http://localhost:8081/api/users/2/rebate
-```
-
-Expected:
-```json
-{
-  "userId": 2,
-  "name": "Bob",
-  "plan": "PREMIUM",
-  "subscribeDate": "2023-01-01",
-  "rebatePercentage": 30.0,
-  "message": "10% loyalty rebate (subscribed for over 1 year) + 20% Premium plan rebate. Total: 30% off renewal."
-}
-```
-
-### Rebate scenarios at a glance
-
-| User setup | Expected rebate |
-|---|---|
-| `plan: BASIC`, subscribed within last year | 0% |
-| `plan: BASIC`, subscribed more than 1 year ago | 10% |
-| `plan: PREMIUM`, subscribed within last year | 20% |
-| `plan: PREMIUM`, subscribed more than 1 year ago | 30% |
-
----
-
-## 15. Verifying Data with Logging
-
-### What to check in the application console
-
-After every API call, the IntelliJ / terminal window running `bootRun` shows:
-
-```
-# The incoming request and its body
-DEBUG CommonsRequestLoggingFilter : REQUEST: POST /api/users, payload={"name":"Bob","plan":"PREMIUM","subscribeDate":"2023-01-01"}
-
-# The SQL that ran
-DEBUG JdbcTemplate               : Executing prepared SQL statement
-      [INSERT INTO users (name, plan, subscribe_date, unsubscribe_date) VALUES (?, ?, ?, ?)]
-
-# The actual parameter values bound to the query
-TRACE StatementCreatorUtils      : Setting SQL statement parameter value ... value [Bob]        type [VARCHAR]
-TRACE StatementCreatorUtils      : Setting SQL statement parameter value ... value [PREMIUM]    type [VARCHAR]
-TRACE StatementCreatorUtils      : Setting SQL statement parameter value ... value [2023-01-01] type [DATE]
-TRACE StatementCreatorUtils      : Setting SQL statement parameter value ... value [null]       type [NULL]
-
-# HTTP response status
-DEBUG DispatcherServlet          : Completed 201 CREATED
-```
-
-This confirms exactly what SQL ran and what values were used — without needing to connect to the database.
-
-### Verify data in DBeaver — Cloud SQL
-
-The Auth Proxy must be running. Open DBeaver and create a connection:
-
-| Field | Value |
-|---|---|
-| Host | `127.0.0.1` |
+| Setting | Value |
+|---------|-------|
+| Host | `localhost` |
 | Port | `5433` |
 | Database | `appdb` |
 | Username | `postgres` |
-| Password | your Cloud SQL password |
+| Password | (from Secret Manager) |
 
-Run these queries:
+Verify queries:
 
 ```sql
--- See all users
-SELECT * FROM users;
+-- All users
+SELECT * FROM users ORDER BY id;
 
--- Confirm both Flyway migrations ran successfully
-SELECT version, description, success, installed_on
-FROM flyway_schema_history
-ORDER BY installed_rank;
+-- Flyway migration history
+SELECT * FROM flyway_schema_history ORDER BY installed_rank;
 
--- Check subscription details with tenure calculation
-SELECT id, name, plan, subscribe_date,
-       EXTRACT(YEAR FROM AGE(NOW(), subscribe_date)) AS years_subscribed
+-- Count per plan
+SELECT plan, COUNT(*) FROM users GROUP BY plan;
+
+-- Unsubscribed users
+SELECT * FROM users WHERE unsubscribe_date IS NOT NULL;
+
+-- Users subscribed > 1 year
+SELECT name, plan, subscribe_date,
+       DATE_PART('year', AGE(subscribe_date)) AS years_subscribed
 FROM users
-WHERE subscribe_date IS NOT NULL;
+WHERE subscribe_date IS NOT NULL
+  AND unsubscribe_date IS NULL
+ORDER BY subscribe_date;
 ```
-
-### Verify data in DBeaver — Local PostgreSQL
-
-| Field | Value |
-|---|---|
-| Host | `localhost` |
-| Port | `5432` |
-| Database | `postgres` |
-| Username | `postgres` |
-| Password | `postgres` |
-
-Run the same queries. The data will be completely different — local and Cloud SQL are independent databases that never sync. Whichever URL is set in `application.properties` is where data goes.
-
-### Verify in GCP Logs Explorer
-
-GCP Console → **Logging** → **Logs Explorer**
-
-Paste a filter and click **Run Query**:
-
-```
-resource.type="cloudsql_database"
-resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
-```
-
-You will see every SQL statement the app sent to Cloud SQL with the actual parameter values:
-
-```
-LOG:  execute <unnamed>: INSERT INTO users (name, plan, subscribe_date, unsubscribe_date)
-      VALUES ($1, $2, $3, $4)
-DETAIL:  parameters: $1 = 'Bob', $2 = 'PREMIUM', $3 = '2023-01-01', $4 = NULL
-```
-
-To narrow down to writes only:
-
-```
-resource.type="cloudsql_database"
-resource.labels.database_id="spring-boot-app-with-cloud-sql:my-postgres-instance"
-textPayload=~"INSERT|UPDATE|DELETE"
-```
-
-### Summary — three ways to verify
-
-| Method | What it shows | When to use |
-|---|---|---|
-| Application console (TRACE logs) | Exact SQL + values the app sent | During development — instant feedback |
-| DBeaver | Actual rows in the database | Confirm data was persisted correctly |
-| GCP Logs Explorer | Server-side SQL log from PostgreSQL | Confirm Cloud SQL received the query |
 
 ---
 
-## 16. Test Suite
-
-### Run all tests
+## Running Tests
 
 ```bash
 ./gradlew test
 ```
 
-### Run with formatting first (recommended before committing)
+**17 tests total** — 6 controller (`@WebMvcTest`) + 11 service (Mockito). H2 in-memory database has been fully removed; no DAO integration tests exist.
 
-```bash
-./gradlew spotlessApply test
-```
-
-### Results
-
-```
-24 tests — 24 passed, 0 failed, 0 skipped
-```
-
-### UserServiceTest — pure unit test
-
-```java
-@ExtendWith(MockitoExtension.class)
-class UserServiceTest {
-  @Mock private UserDao userDao;
-  private UserService userService;
-
-  @BeforeEach
-  void setUp() {
-    userService = new UserService(userDao); // constructor injection makes this one line
-  }
-}
-```
-
-No Spring context loaded. Runs in milliseconds. Covers: create, findAll, findById, findById-not-found, update, delete, and all five rebate scenarios (0%, 10%, 20%, 30%, no-subscribe-date).
-
-### UserDaoTest — JDBC slice test
-
-```java
-@JdbcTest
-@Import({UserDao.class, UserRowMapper.class})
-@TestPropertySource(properties = {"spring.flyway.enabled=false"})
-@Sql(statements = { "CREATE TABLE IF NOT EXISTS users (...)" })
-class UserDaoTest { }
-```
-
-- `@JdbcTest` starts only the JDBC slice — no web layer, no services — wired with H2
-- Flyway is disabled so it does not try to apply PostgreSQL-specific SQL to H2
-- Schema is created via `@Sql` before each test
-- Covers: insert, insert with subscription fields, findAll, findById, findById-empty, update, deleteById
-
-### UserControllerTest — web layer slice test
-
-```java
-@WebMvcTest(UserController.class)
-class UserControllerTest {
-  @Autowired private MockMvc mockMvc;
-  @MockitoBean private UserService userService;
-}
-```
-
-- `@WebMvcTest` loads only the web layer — no service or DAO wiring, no Tomcat started
-- `MockMvc` sends requests in-process and inspects the response
-- Covers: POST 201, GET 200, GET by ID 200, PUT 200, DELETE 200, rebate response shape
+Coverage report after test run: `build/reports/jacoco/test/html/index.html`
 
 ---
 
-## 17. Cloud Run Deployment
+## Code Quality (Spotless + SonarCloud)
 
-### Step 1 — Switch datasource to Socket Factory
-
-In `application.properties`:
-
-```properties
-spring.datasource.url=jdbc:postgresql:///${DB_NAME:appdb}?cloudSqlInstance=${INSTANCE_CONNECTION_NAME:}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
-spring.datasource.username=${DB_USER:postgres}
-spring.datasource.password=${DB_PASS:}
-```
-
-### Step 2 — Build and push Docker image
+### Spotless (auto-formatting)
 
 ```bash
-gcloud builds submit --tag gcr.io/spring-boot-app-with-cloud-sql/spring-boot-app
+# Check
+./gradlew spotlessCheck
+
+# Fix
+./gradlew spotlessApply
 ```
 
-### Step 3 — Deploy
+### SonarCloud (static analysis + coverage)
 
-```bash
-gcloud run deploy spring-boot-app \
-  --image gcr.io/spring-boot-app-with-cloud-sql/spring-boot-app \
-  --platform managed \
-  --region us-central1 \
-  --add-cloudsql-instances spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance \
-  --set-env-vars INSTANCE_CONNECTION_NAME=spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance \
-  --set-env-vars DB_NAME=appdb \
-  --set-env-vars DB_USER=postgres \
-  --set-env-vars DB_PASS=YOUR_PASSWORD
-```
-
-Flyway runs on startup and applies pending migrations to Cloud SQL automatically.
-
----
-
-## 18. Coding Standards
-
-| Rule | Detail |
-|---|---|
-| No Lombok | Getters, setters, constructors written explicitly |
-| No direct Hibernate | Spring JDBC used; JPA not on the classpath |
-| Constructor injection | Never `@Autowired` on fields |
-| `@ResponseStatus` on every handler | POST → `201 Created`, all others → `200 OK` |
-| `@RestController` | All controller classes |
-| `@Service` | All service classes |
-| `@Repository` | All DAO classes — enables exception translation |
-| `@Configuration` | All config classes in the `config` package |
-| Named parameters only | `NamedParameterJdbcTemplate` — never positional `?` |
-| Flyway constraint naming | `TABLE_PK`, `TABLE_FK`, `TABLE_COL_IDX` |
-| Spotless on every build | `./gradlew spotlessApply` before commit |
-| DTOs for output shapes | Computed fields do not belong in the entity |
-
----
-
-## 19. Troubleshooting
-
-### App starts but returns "relation users does not exist"
-
-Flyway did not run. Check:
-- `spring.flyway.enabled=true` is in `application.properties`
-- The datasource URL points to the correct database (`appdb` for Cloud SQL, `postgres` for local)
-- Migration files are under `src/main/resources/db/migration/` with correct `V{n}__` prefix
-
-### Port already in use
+1. Set your SonarCloud token:
 
 ```powershell
-netstat -ano | findstr :8081
-taskkill /PID <PID> /F
+$env:SONAR_TOKEN = "your_token_here"
 ```
 
-### Cloud SQL connection refused
+2. Update `sonar.organization` in [build.gradle.kts](build.gradle.kts) with your SonarCloud org key.
 
-- Confirm the Auth Proxy is still running in its terminal
-- Confirm `spring.datasource.url` uses `127.0.0.1:5433`
-- Confirm your current public IP is still authorized: Instance → Connections → Networking
-- Re-authenticate if credentials expired: `gcloud auth application-default login`
+3. Run analysis:
 
-### Flyway checksum mismatch on startup
+```bash
+./gradlew test jacocoTestReport sonar --info
+```
 
-You edited a migration file that was already applied. Options:
-- Local dev database only: drop the database and let Flyway re-apply from scratch
-- Shared environment with real data: create a new `V{n+1}__` migration for the change
+Results: `https://sonarcloud.io/project/overview?id=spring-boot-app-with-cloud-sql`
 
-### LocalDate serializes as `[2024, 1, 15]` instead of `"2024-01-15"`
+**Exclusions** (not analysed): `**/config/**`, `**/dto/**`, `**/entity/**`
 
-`JacksonConfig` is not being picked up. Verify it exists in the `config` package, is annotated `@Configuration`, and the `@Bean` method registers `JavaTimeModule` with `WRITE_DATES_AS_TIMESTAMPS` disabled.
+---
 
-### No SQL logs appearing in the console
+## GCP Setup: Dashboard + CLI
 
-Verify these three lines are in `application.properties`:
+**Project:** `spring-boot-app-with-cloud-sql`
+**Project Number:** `32568250152`
+**Region:** `us-central1`
+
+### Step 1 — Enable APIs
+
+**Dashboard:** GCP Console -> APIs & Services -> Enable APIs -> enable each service below.
+
+**CLI:**
+```bash
+gcloud config set project spring-boot-app-with-cloud-sql
+
+gcloud services enable \
+  cloudbuild.googleapis.com \
+  run.googleapis.com \
+  sqladmin.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  cloudresourcemanager.googleapis.com
+```
+
+### Step 2 — Create Artifact Registry
+
+**Dashboard:** Artifact Registry -> Create Repository -> name: `spring-boot-repo`, format: Docker, region: `us-central1`.
+
+**CLI:**
+```bash
+gcloud artifacts repositories create spring-boot-repo \
+  --repository-format=docker \
+  --location=us-central1 \
+  --description="Spring Boot Docker images"
+```
+
+### Step 3 — Create Service Account
+
+**Dashboard:** IAM & Admin -> Service Accounts -> Create Service Account -> name: `spring-boot-sa`.
+
+**CLI:**
+```bash
+gcloud iam service-accounts create spring-boot-sa \
+  --display-name="Spring Boot App SA" \
+  --project=spring-boot-app-with-cloud-sql
+```
+
+SA email: `spring-boot-sa@spring-boot-app-with-cloud-sql.iam.gserviceaccount.com`
+
+Grant required roles:
+
+```bash
+SA="spring-boot-sa@spring-boot-app-with-cloud-sql.iam.gserviceaccount.com"
+PROJECT="spring-boot-app-with-cloud-sql"
+
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/cloudsql.client"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/run.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/artifactregistry.writer"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/secretmanager.secretAccessor"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/iam.serviceAccountUser"
+```
+
+Grant the Cloud Build SA permission to deploy:
+
+```bash
+CLOUD_BUILD_SA="32568250152@cloudbuild.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$CLOUD_BUILD_SA" --role="roles/run.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$CLOUD_BUILD_SA" --role="roles/iam.serviceAccountUser"
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$CLOUD_BUILD_SA" --role="roles/artifactregistry.writer"
+```
+
+### Step 4 — Create Cloud SQL Instance
+
+**Dashboard:** SQL -> Create Instance -> PostgreSQL -> instance ID: `my-postgres-instance`, region: `us-central1`, set postgres password.
+
+**CLI:**
+```bash
+gcloud sql instances create my-postgres-instance \
+  --database-version=POSTGRES_15 \
+  --tier=db-f1-micro \
+  --region=us-central1 \
+  --project=spring-boot-app-with-cloud-sql
+```
+
+Create the database and set the password:
+
+```bash
+gcloud sql databases create appdb --instance=my-postgres-instance
+
+gcloud sql users set-password postgres \
+  --instance=my-postgres-instance \
+  --password=YOUR_PASSWORD
+```
+
+### Step 5 — Store DB Password in Secret Manager
+
+**Dashboard:** Security -> Secret Manager -> Create Secret -> name: `db-password`, paste your postgres password as the secret value.
+
+**CLI:**
+```bash
+echo -n "YOUR_PASSWORD" | gcloud secrets create db-password \
+  --data-file=- \
+  --project=spring-boot-app-with-cloud-sql
+```
+
+---
+
+## Deploy to Cloud Run
+
+### First deploy
+
+```powershell
+gcloud builds submit . --config=cloudbuild.yaml --substitutions='_SA_EMAIL=spring-boot-sa@spring-boot-app-with-cloud-sql.iam.gserviceaccount.com,_TAG=v1.0.0'
+```
+
+> **PowerShell note:** Wrap the entire `--substitutions` value in single quotes so PowerShell does not split on commas.
+
+### Grant public access (run once after first deploy)
+
+The `--allow-unauthenticated` flag in `cloudbuild.yaml` sets the service property, but the IAM policy binding must also be added separately:
+
+```bash
+gcloud run services add-iam-policy-binding spring-boot-app \
+  --region=us-central1 \
+  --member="allUsers" \
+  --role="roles/run.invoker"
+```
+
+### Monitor build progress
+
+```bash
+# List recent builds
+gcloud builds list --limit=5
+
+# Stream logs for a specific build
+gcloud builds log BUILD_ID
+```
+
+---
+
+## Verify the Deployment
+
+### API checks (curl)
+
+```bash
+# Health check
+curl https://spring-boot-app-rire725v4q-uc.a.run.app/actuator/health
+
+# List all users (returns 10 seed users from V3 migration)
+curl https://spring-boot-app-rire725v4q-uc.a.run.app/api/users
+
+# Create a new user
+curl -X POST https://spring-boot-app-rire725v4q-uc.a.run.app/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test User","plan":"PREMIUM","subscribeDate":"2023-01-01"}'
+
+# Rebate for user 1 (Alice Johnson — PREMIUM, subscribed 2022 = 30%)
+curl https://spring-boot-app-rire725v4q-uc.a.run.app/api/users/1/rebate
+```
+
+### Cloud SQL via DBeaver (through Cloud SQL Auth Proxy)
+
+Start the proxy locally:
+```powershell
+.\cloud-sql-proxy.exe spring-boot-app-with-cloud-sql:us-central1:my-postgres-instance --port=5433
+```
+
+Connect DBeaver: `localhost:5433` / database `appdb` / user `postgres`.
+
+Verify queries:
+
+```sql
+-- All 10 seed users
+SELECT id, name, plan, subscribe_date, unsubscribe_date FROM users ORDER BY id;
+
+-- Confirm all 3 Flyway migrations ran successfully
+SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank;
+
+-- Expected rebate per user (calculated in SQL)
+SELECT
+    name,
+    plan,
+    subscribe_date,
+    unsubscribe_date,
+    CASE
+        WHEN unsubscribe_date IS NOT NULL                                         THEN '0%  (unsubscribed)'
+        WHEN subscribe_date IS NULL                                               THEN '0%  (no date)'
+        WHEN plan = 'PREMIUM' AND subscribe_date <= CURRENT_DATE - INTERVAL '1 year' THEN '30% (premium + loyal)'
+        WHEN plan = 'PREMIUM'                                                     THEN '20% (premium)'
+        WHEN plan = 'BASIC'   AND subscribe_date <= CURRENT_DATE - INTERVAL '1 year' THEN '10% (loyal)'
+        ELSE                                                                           '0%  (basic, new)'
+    END AS expected_rebate
+FROM users
+ORDER BY id;
+```
+
+### Cloud Logging (Cloud Run request logs)
+
+**Dashboard:** Cloud Run -> `spring-boot-app` -> Logs tab.
+
+**CLI:**
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="spring-boot-app"' \
+  --limit=50 \
+  --format="table(timestamp,textPayload)"
+```
+
+HTTP request bodies appear in logs because `RequestLoggingConfig` registers `CommonsRequestLoggingFilter`.
+
+---
+
+## Redeploy
+
+Increment the tag for each new deployment:
+
+```powershell
+gcloud builds submit . --config=cloudbuild.yaml --substitutions='_SA_EMAIL=spring-boot-sa@spring-boot-app-with-cloud-sql.iam.gserviceaccount.com,_TAG=v1.0.1'
+```
+
+The `_TAG` substitution tags the Docker image in Artifact Registry and deploys that exact image to Cloud Run. Using a versioned tag (not `latest`) ensures reproducible rollbacks.
+
+> **Why not `SHORT_SHA`?** `SHORT_SHA` is only populated by git-trigger builds, not `gcloud builds submit`. Use `_TAG` with an explicit version instead.
+
+---
+
+## Key Implementation Notes
+
+### Jackson / LocalDate fix
+
+Spring Boot 4 with Jackson 3 cannot bind `spring.jackson.serialization.write-dates-as-timestamps=false` via properties (enum package moved to `tools.jackson`). Fixed with a `@Bean ObjectMapper` in `JacksonConfig.java` that registers `JavaTimeModule` directly.
+
+### Cloud Run socket connection
+
+[`application-cloudrun.properties`](src/main/resources/application-cloudrun.properties) uses `postgres-socket-factory` for Unix socket connections — no TCP port, no open firewall rules:
+
 ```properties
-logging.level.org.springframework.jdbc.core=DEBUG
-logging.level.org.springframework.jdbc.core.StatementCreatorUtils=TRACE
-logging.level.org.springframework.web.filter.CommonsRequestLoggingFilter=DEBUG
+spring.datasource.url=jdbc:postgresql:///${DB_NAME}?cloudSqlInstance=${INSTANCE_CONNECTION_NAME}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
 ```
 
-### Tests fail with `IllegalStateException: Failed to load ApplicationContext`
+Activated by `SPRING_PROFILES_ACTIVE=cloudrun` set in `cloudbuild.yaml`.
 
-Run `./gradlew test --info` and look for the innermost `Caused by`. Common causes:
-- Property binding failure — check `application.properties` for unsupported keys
-- Missing `@Import` on `@JdbcTest` — `UserDao` and `UserRowMapper` must be imported explicitly
-- Missing `@MockitoBean` on `@WebMvcTest` — all service dependencies of the controller must be mocked
+### Dockerfile — three fixes applied
+
+| Fix | Reason |
+|-----|--------|
+| `COPY build.gradle.kts settings.gradle.kts ./` (trailing `./`) | Without the trailing slash Docker treats the last arg as a filename, not a directory |
+| `RUN chmod +x gradlew` | Windows git does not preserve Linux execute bits; Cloud Build fails with exit 126 |
+| `RUN ./gradlew bootJar --no-daemon -x test` | No database is available in the Docker build layer — skip tests |
