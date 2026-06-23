@@ -204,8 +204,8 @@ spring-boot-app-with-cloud-sql/
 │           └── service/
 │               └── UserServiceTest.java                    ← 11 tests (Mockito)
 ├── gradle.lockfile                                         ← Dependency lock file (reproducible builds)
-├── build.gradle.kts                                        ← Gradle build script
-├── settings.gradle.kts                                     ← Project name
+├── build.gradle                                            ← Gradle build script (Groovy DSL)
+├── settings.gradle                                         ← Project name (Groovy DSL)
 ├── Dockerfile                                              ← Multi-stage Docker build
 ├── cloudbuild.yaml                                         ← GCP CI/CD pipeline
 ├── gradlew / gradlew.bat                                   ← Gradle wrapper scripts
@@ -248,7 +248,7 @@ Sub-packages mirror the **layered architecture**:
 | Migrations | Flyway | (managed by Spring Boot BOM) | Versioned, idempotent SQL migrations |
 | Database | PostgreSQL | 15 | Managed Cloud SQL; ACID; rich data types |
 | API Docs | SpringDoc OpenAPI | 2.8.9 | Zero-config Swagger UI from annotations |
-| Build | Gradle (Kotlin DSL) | 9.5.1 | Type-safe build scripts; incremental builds; dependency locking |
+| Build | Gradle (Groovy DSL) | 9.5.1 | Expressive build scripts; incremental builds; dependency locking |
 | Container | Docker | multi-stage | Reproducible builds; slim runtime image |
 | CI/CD | Google Cloud Build | managed | Native GCP integration; no server to manage |
 | Runtime | Google Cloud Run | managed | Serverless; scales to zero; pay per request |
@@ -262,7 +262,7 @@ Sub-packages mirror the **layered architecture**:
 
 ## 8. Dependency Analysis
 
-Each dependency in `build.gradle.kts` is explained below.
+Each dependency in `build.gradle` is explained below.
 
 ### Runtime / Compile Dependencies
 
@@ -371,30 +371,30 @@ testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
 ## 9. Build Configuration Analysis
 
-### `settings.gradle.kts`
+### `settings.gradle`
 
-```kotlin
-rootProject.name = "spring-boot-app-with-cloud-sql"
+```groovy
+rootProject.name = 'spring-boot-app-with-cloud-sql'
 ```
 
 **Line by line:**
 
 | Line | Explanation |
 |------|------------|
-| `rootProject.name = "spring-boot-app-with-cloud-sql"` | Sets the Gradle project name. This becomes the artifact name (the JAR file is named `spring-boot-app-with-cloud-sql-0.0.1-SNAPSHOT.jar`). Must match across `build.gradle.kts` and deployment configs. |
+| `rootProject.name = 'spring-boot-app-with-cloud-sql'` | Sets the Gradle project name. This becomes the artifact name (the JAR file is named `spring-boot-app-with-cloud-sql-0.0.1-SNAPSHOT.jar`). Must match across `build.gradle` and deployment configs. |
 
 ---
 
-### `build.gradle.kts`
+### `build.gradle`
 
-```kotlin
+```groovy
 plugins {
-    java
-    id("org.springframework.boot") version "4.1.0"
-    id("io.spring.dependency-management") version "1.1.7"
-    id("com.diffplug.spotless") version "7.0.4"
-    id("org.sonarqube") version "6.2.0.5505"
-    jacoco
+    id 'java'
+    id 'org.springframework.boot' version '4.1.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'com.diffplug.spotless' version '7.0.4'
+    id 'org.sonarqube' version '6.2.0.5505'
+    id 'jacoco'
 }
 ```
 
@@ -409,15 +409,15 @@ plugins {
 | `org.sonarqube` | Adds `sonar` task to push results to SonarCloud; version `6.2.0.5505` required for Gradle 9 compatibility (earlier versions used the removed `Convention` API) | No static analysis integration |
 | `jacoco` | Built-in Gradle plugin; produces coverage XML/HTML report | No coverage data; SonarCloud cannot show coverage |
 
-```kotlin
-group = "com.cloud.sql"
-version = "0.0.1-SNAPSHOT"
+```groovy
+group = 'com.cloud.sql'
+version = '0.0.1-SNAPSHOT'
 ```
 
 - `group`: Maven group ID. Part of artifact coordinates `com.cloud.sql:spring-boot-app-with-cloud-sql:0.0.1-SNAPSHOT`.
 - `version`: `SNAPSHOT` suffix signals this is a development build, not a release.
 
-```kotlin
+```groovy
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
@@ -427,7 +427,7 @@ java {
 
 **Toolchain:** Tells Gradle to use Java 21 specifically. If the machine has multiple JDKs installed, Gradle will pick the correct one (or auto-provision it). This ensures consistent builds across developer machines and CI.
 
-```kotlin
+```groovy
 spotless {
     java {
         googleJavaFormat()
@@ -444,14 +444,14 @@ spotless {
 - `trimTrailingWhitespace()` — removes spaces at end of lines.
 - `endWithNewline()` — ensures every file ends with a newline (Unix convention).
 
-```kotlin
-val springdocVersion = "2.8.9"
-val cloudSqlSocketFactoryVersion = "1.21.0"
+```groovy
+def springdocVersion = '2.8.9'
+def cloudSqlSocketFactoryVersion = '1.21.0'
 ```
 
 Extracting hardcoded versions into variables prevents drift — changing a library version is a one-line edit at the top of the file, and the string appears only once. SonarCloud also flags inline version literals as a maintainability smell.
 
-```kotlin
+```groovy
 dependencyLocking {
     lockAllConfigurations()
 }
@@ -459,15 +459,14 @@ dependencyLocking {
 
 Enables Gradle dependency locking. Once enabled, run `./gradlew dependencies --write-locks` to generate `gradle.lockfile`, which pins every transitive dependency to its exact resolved version. Without this file, a new transitive dependency version could silently appear in a build. SonarCloud flags the absence of a lockfile as a **Security** issue (unpredictable dependency versions).
 
-```kotlin
+```groovy
 sonar {
     properties {
-        property("sonar.projectKey", "spring-boot-app-with-cloud-sql")
-        property("sonar.organization", "spring-boot-app-with-cloud-sq")
-        property("sonar.host.url", "https://sonarcloud.io")
-        property("sonar.coverage.jacoco.xmlReportPaths",
-            "${layout.buildDirectory.get()}/reports/jacoco/test/jacocoTestReport.xml")
-        property("sonar.exclusions", "**/config/**,**/dto/**,**/entity/**")
+        property 'sonar.projectKey', 'spring-boot-app-with-cloud-sql'
+        property 'sonar.organization', 'spring-boot-app-with-cloud-sq'
+        property 'sonar.host.url', 'https://sonarcloud.io'
+        property 'sonar.coverage.jacoco.xmlReportPaths', "${layout.buildDirectory.get()}/reports/jacoco/test/jacocoTestReport.xml"
+        property 'sonar.exclusions', '**/config/**,**/dto/**,**/entity/**'
     }
 }
 ```
@@ -487,7 +486,7 @@ $env:SONAR_TOKEN = "your_token_here"
 ./gradlew clean test jacocoTestReport sonar
 ```
 
-SonarCloud reads `SONAR_TOKEN` automatically from the environment. Storing it in `build.gradle.kts` or any committed file is a critical security violation.
+SonarCloud reads `SONAR_TOKEN` automatically from the environment. Storing it in `build.gradle` or any committed file is a critical security violation.
 
 **SonarCloud quality results (achieved):**
 
@@ -507,16 +506,16 @@ SonarCloud reads `SONAR_TOKEN` automatically from the environment. Storing it in
 | 2 | `rs.getDate()` deprecated | Replaced with `rs.getObject(..., LocalDate.class)` in `UserRowMapper` |
 | 3 | `LocalDate.now()` without timezone | Changed to `LocalDate.now(Clock.systemUTC())` in `UserService` |
 | 4 | Magic int `1` for month | Changed to `Month.JANUARY` enum in `UserControllerTest` |
-| 5–7 | Hardcoded version strings | Extracted to `val springdocVersion` and `val cloudSqlSocketFactoryVersion` |
+| 5–7 | Hardcoded version strings | Extracted to `def springdocVersion` and `def cloudSqlSocketFactoryVersion` |
 
-```kotlin
-tasks.withType<Test> {
+```groovy
+tasks.withType(Test) {
     useJUnitPlatform()
-    finalizedBy(tasks.jacocoTestReport)
+    finalizedBy jacocoTestReport
 }
 
-tasks.jacocoTestReport {
-    dependsOn(tasks.test)
+jacocoTestReport {
+    dependsOn test
     reports {
         xml.required = true
         html.required = true
@@ -525,7 +524,7 @@ tasks.jacocoTestReport {
 ```
 
 - `useJUnitPlatform()` — tells Gradle to use JUnit 5 engine to run tests.
-- `finalizedBy(tasks.jacocoTestReport)` — always generate the coverage report after tests, even if tests fail.
+- `finalizedBy jacocoTestReport` — always generate the coverage report after tests, even if tests fail.
 - `xml.required = true` — SonarCloud reads the XML format; HTML is for humans browsing locally.
 
 ---
@@ -1418,7 +1417,7 @@ FROM eclipse-temurin:21-jdk-alpine AS build
 WORKDIR /app
 COPY gradlew .
 COPY gradle gradle
-COPY build.gradle.kts settings.gradle.kts ./
+COPY build.gradle settings.gradle ./
 RUN chmod +x gradlew
 RUN ./gradlew dependencies --no-daemon
 COPY src src
@@ -1446,9 +1445,9 @@ A **multi-stage build** uses two Docker images. The first (build) image has the 
 | `WORKDIR /app` | All subsequent commands run from `/app`. Creates the directory if it doesn't exist |
 | `COPY gradlew .` | Copies the Gradle wrapper script into `/app/gradlew` |
 | `COPY gradle gradle` | Copies the `gradle/` directory (contains wrapper JAR and properties) into `/app/gradle/` |
-| `COPY build.gradle.kts settings.gradle.kts ./` | Copies build files; **`./` (trailing slash)** is critical — without it Docker treats the last argument as a filename, not a directory, causing a build failure |
+| `COPY build.gradle settings.gradle ./` | Copies build files; **`./` (trailing slash)** is critical — without it Docker treats the last argument as a filename, not a directory, causing a build failure |
 | `RUN chmod +x gradlew` | Grants execute permission to the Gradle wrapper. **Required** because Windows git does not preserve Linux execute bits; Cloud Build would fail with `Permission denied (exit 126)` without this |
-| `RUN ./gradlew dependencies --no-daemon` | Downloads all Gradle dependencies. This layer is cached — as long as `build.gradle.kts` doesn't change, this expensive step is skipped on subsequent builds |
+| `RUN ./gradlew dependencies --no-daemon` | Downloads all Gradle dependencies. This layer is cached — as long as `build.gradle` doesn't change, this expensive step is skipped on subsequent builds |
 | `COPY src src` | Copies source code **after** the dependency cache layer. This order is intentional — source changes don't invalidate the dependency cache |
 | `RUN ./gradlew bootJar --no-daemon -x test` | Compiles and packages the app into an executable fat JAR. `-x test` skips tests because no database is available inside the Docker build environment |
 
@@ -2124,7 +2123,7 @@ Flyway runs on every startup, including when Cloud Run scales up a new instance.
 The Dockerfile is structured to maximise cache hits:
 
 ```dockerfile
-COPY build.gradle.kts settings.gradle.kts ./  # Cache layer 1 — rarely changes
+COPY build.gradle settings.gradle ./  # Cache layer 1 — rarely changes
 RUN ./gradlew dependencies --no-daemon         # Cache layer 2 — deps downloaded once
 COPY src src                                   # Cache layer 3 — changes often
 RUN ./gradlew bootJar ...                      # Re-runs only when src changes
@@ -2178,11 +2177,11 @@ Cloud Run uses `/actuator/health` to determine if a revision is healthy. If it r
 
 #### Symptom: `NoSuchBeanDefinitionException: NamedParameterJdbcTemplate`
 
-**Root Cause:** `JdbcConfig.java` missing, or `spring-boot-starter-jdbc` not in `build.gradle.kts`.
+**Root Cause:** `JdbcConfig.java` missing, or `spring-boot-starter-jdbc` not in `build.gradle`.
 
 **Resolution:**
 1. Verify `JdbcConfig.java` exists in `config` package.
-2. Verify `implementation("org.springframework.boot:spring-boot-starter-jdbc")` in `build.gradle.kts`.
+2. Verify `implementation("org.springframework.boot:spring-boot-starter-jdbc")` in `build.gradle`.
 
 ---
 
@@ -2252,9 +2251,9 @@ Then redeploy.
 
 #### Symptom: `COPY failed: no source files were specified`
 
-**Root Cause:** `COPY build.gradle.kts settings.gradle.kts .` without trailing slash.
+**Root Cause:** `COPY build.gradle settings.gradle .` without trailing slash.
 
-**Resolution:** Use `COPY build.gradle.kts settings.gradle.kts ./`
+**Resolution:** Use `COPY build.gradle settings.gradle ./`
 
 ---
 
@@ -2449,7 +2448,7 @@ A: `ENTRYPOINT` defines the primary command that cannot be overridden without `-
 
 **Q: Why is the dependency download step (`./gradlew dependencies`) before copying source code?**
 
-A: Docker builds images in layers. If `COPY src src` came first, every source code change would invalidate the layer cache and force Gradle to re-download all dependencies. By copying build files first and downloading dependencies in their own layer, that layer is cached and reused as long as `build.gradle.kts` doesn't change.
+A: Docker builds images in layers. If `COPY src src` came first, every source code change would invalidate the layer cache and force Gradle to re-download all dependencies. By copying build files first and downloading dependencies in their own layer, that layer is cached and reused as long as `build.gradle` doesn't change.
 
 ---
 
@@ -2531,7 +2530,7 @@ A:
 | **DataSource** | A connection pool that manages reusable database connections (HikariCP in this project) |
 | **DTO** | Data Transfer Object — a class shaped specifically for an API request/response, not the database |
 | **Flyway** | Database migration tool that applies versioned SQL scripts in order |
-| **Gradle** | Build automation tool; `build.gradle.kts` defines how to compile, test, and package the app |
+| **Gradle** | Build automation tool; `build.gradle` (Groovy DSL) defines how to compile, test, and package the app |
 | **HikariCP** | High-performance JDBC connection pool; Spring Boot's default |
 | **IAM** | Identity and Access Management — GCP's system for controlling who can do what |
 | **Idempotent** | An operation that produces the same result no matter how many times it is run |

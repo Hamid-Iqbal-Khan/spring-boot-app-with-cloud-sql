@@ -30,7 +30,7 @@ A production-ready Spring Boot 4.1.0 REST API that persists data to Cloud SQL (P
 | Database | PostgreSQL (Cloud SQL) |
 | Data Access | Spring JDBC — `NamedParameterJdbcTemplate` |
 | Migrations | Flyway |
-| Build | Gradle (Kotlin DSL) |
+| Build | Gradle (Groovy DSL) |
 | Container | Docker (multi-stage, Eclipse Temurin 21) |
 | CI/CD | Google Cloud Build |
 | Runtime | Google Cloud Run |
@@ -529,6 +529,6 @@ Activated by `SPRING_PROFILES_ACTIVE=cloudrun` set in `cloudbuild.yaml`.
 
 | Fix | Reason |
 |-----|--------|
-| `COPY build.gradle.kts settings.gradle.kts ./` (trailing `./`) | Without the trailing slash Docker treats the last arg as a filename, not a directory |
+| `COPY build.gradle settings.gradle ./` (trailing `./`) | Without the trailing slash Docker treats the last arg as a filename, not a directory |
 | `RUN chmod +x gradlew` | Windows git does not preserve Linux execute bits; Cloud Build fails with exit 126 |
 | `RUN ./gradlew bootJar --no-daemon -x test` | No database is available in the Docker build layer — skip tests |
