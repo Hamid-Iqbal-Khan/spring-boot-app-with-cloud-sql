@@ -1,1 +1,0 @@
-rootProject.name = "spring-boot-app-with-cloud-sql"
